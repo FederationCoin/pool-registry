@@ -27,7 +27,7 @@
     "@nestjs/core": "^11.1.6",
     "@nestjs/platform-express": "^11.1.6",
     "@nestjs/schedule": "^6.0.1",
-    "@noble/hashes": "^1.8.0",
+    "@noble/hashes": "^2.4.0",
     "@noble/secp256k1": "^2.3.0",
     "bech32": "^2.0.0",
     "canonicalize": "^2.1.0",
