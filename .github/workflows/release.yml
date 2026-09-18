@@ -23,6 +23,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           VER=$(node -p "require('./package.json').version")
           OAS=$(python3 -c "import re,sys; print(re.search(r'version:\s*([0-9.]+)', open('openapi/registry.yaml').read()).group(1))")
           test "$VER" = "$OAS"
