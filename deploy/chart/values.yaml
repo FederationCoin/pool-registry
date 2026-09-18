@@ -1,0 +1,24 @@
+# Overlay from the parent dump supplies registry (ECR host) via --set.
+# Do not put account ids or DSNs here.
+replicaCount: 1
+registry: ""
+image:
+  repository: federationcoin-registry
+  tag: testnet-latest
+  pullPolicy: Always
+redis:
+  enabled: true
+  image: federationcoin-redis
+  tag: "7"
+host: pools.federationcoin.org
+ingress:
+  group: federationcoin-https
+certificateArn: ""
+wafAclArn: ""
+serviceAccount:
+  create: true
+  name: federationcoin-registry
+secret:
+  name: federationcoin-registry
+  fileKey: settings.json
+port: 8080

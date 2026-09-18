@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - get-to-mainnet
+  pull_request:
+    branches:
+      - get-to-mainnet
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+
+  contract:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: OpenAPI breaking vs mainline
+        if: github.event_name == 'pull_request'
+        id: spec
+        run: |
+          set -eu
+          if git cat-file -e "origin/${{ github.base_ref }}:openapi/registry.yaml" 2>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "no mainline spec yet; skip"
+          fi
+      - name: oasdiff breaking
+        if: github.event_name == 'pull_request' && steps.spec.outputs.exists == 'true'
+        uses: oasdiff/oasdiff-action/breaking@main
+        with:
+          base: origin/${{ github.base_ref }}/openapi/registry.yaml
+          revision: openapi/registry.yaml
+          fail-on-diff: true

@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    branches: [get-to-mainnet]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event.head_commit.message != 'chore(release)*'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - name: Tag explicit version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          VER=$(node -p "require('./package.json').version")
+          OAS=$(python3 -c "import re,sys; print(re.search(r'version:\s*([0-9.]+)', open('openapi/registry.yaml').read()).group(1))")
+          test "$VER" = "$OAS"
+          if git rev-parse "v$VER" >/dev/null 2>&1; then
+            echo "tag exists"
+            exit 0
+          fi
+          git tag -a "v$VER" -m "v$VER"
+          git push origin "v$VER"
+          gh release create "v$VER" --title "v$VER" --notes "Notes-only. No assets. No npm. No docker." --latest

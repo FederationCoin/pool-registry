@@ -1,0 +1,7 @@
+{
+  "listingStore": { "kind": "memory" },
+  "cacheStore": { "kind": "memory" },
+  "chainRpc": {},
+  "corsOrigins": ["https://mine.federationcoin.org"],
+  "trustedProxyHops": 1
+}

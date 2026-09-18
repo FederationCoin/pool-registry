@@ -1,0 +1,81 @@
+{{- $reg := required "registry is required (helm --set registry=...; do not commit it)" .Values.registry }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  labels:
+    app: federationcoin-registry
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: federationcoin-registry
+  template:
+    metadata:
+      labels:
+        app: federationcoin-registry
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: registry
+          image: {{ $reg }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PORT
+              value: {{ .Values.port | quote }}
+            - name: REGISTRY_SETTINGS_FILE
+              value: /var/run/secrets/registry/{{ .Values.secret.fileKey }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          volumeMounts:
+            - name: settings
+              mountPath: /var/run/secrets/registry
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /v1/readyz
+              port: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: settings
+          secret:
+            secretName: {{ .Values.secret.name }}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  labels:
+    app: federationcoin-registry
+spec:
+  selector:
+    app: federationcoin-registry
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

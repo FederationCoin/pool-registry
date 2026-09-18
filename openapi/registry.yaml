@@ -1,0 +1,819 @@
+openapi: 3.0.3
+info:
+  title: FederationCoin pool registry
+  version: 0.1.0
+  description: >
+    Frozen /v1. Self-hostable NestJS registry
+    (FederationCoin/pool-registry), not federation-pool WSS. Domain
+    operations require X-FederationCoin-Chain (testnet or main). Writes
+    also require Authorization Bearer (base64url SigningEnvelope JSON),
+    not an IdP JWT. CORS origins come from SecretStore (origin mill:
+    mine.federationcoin.org); no wildcard; no credentials. Dummy MAIN is
+    not launched. additionalProperties false. Opaque FindCursor. ListingConnect
+    is oneOf three kinds.
+servers:
+  - url: https://pools.federationcoin.org
+    description: Origin hosted instance on the shared ALB (when epic 2 executes)
+  - url: https://registry.example.com
+    description: Self-hosted instance (CORS origins from SecretStore)
+security: []
+tags:
+  - name: docs
+  - name: health
+  - name: find
+  - name: stake
+  - name: listings
+  - name: reviews
+paths:
+  /v1/openapi.json:
+    get:
+      tags: [docs]
+      summary: OpenAPI document
+      operationId: getOpenApi
+      responses:
+        "200":
+          description: OpenAPI JSON
+  /v1/docs:
+    get:
+      tags: [docs]
+      summary: API docs UI (Helmet; no internals)
+      operationId: getDocs
+      responses:
+        "200":
+          description: HTML docs
+  /v1/healthz:
+    get:
+      tags: [health]
+      summary: Process up
+      operationId: getHealthz
+      responses:
+        "200":
+          description: Live
+  /v1/readyz:
+    get:
+      tags: [health]
+      summary: Store, cache, and chain tip
+      operationId: getReadyz
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/listings:
+    parameters:
+      - $ref: "#/components/parameters/chainHeader"
+    get:
+      tags: [find]
+      summary: Find active listings
+      operationId: findActiveListings
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 64
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: LiveListing page; inactiveMatchHint always set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FindActivePage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      tags: [listings]
+      summary: Register a listing
+      operationId: registerListing
+      security:
+        - signingEnvelope: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterListing"
+      responses:
+        "201":
+          description: Created; server ULID poolId
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/listings/inactive:
+    parameters:
+      - $ref: "#/components/parameters/chainHeader"
+    get:
+      tags: [find]
+      summary: Find hidden-inactive listings
+      operationId: findInactiveListings
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 64
+        - $ref: "#/components/parameters/cursor"
+      responses:
+        "200":
+          description: HiddenInactiveListing page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FindInactivePage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/listings/{poolId}:
+    parameters:
+      - $ref: "#/components/parameters/chainHeader"
+      - $ref: "#/components/parameters/poolId"
+    get:
+      tags: [find]
+      summary: Get one listing
+      operationId: getListing
+      responses:
+        "200":
+          description: ListingPublic
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListingPublic"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    patch:
+      tags: [listings]
+      summary: Replace the mutable set
+      operationId: updateListing
+      security:
+        - signingEnvelope: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateListing"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListingPublic"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    delete:
+      tags: [listings]
+      summary: Deregister
+      operationId: deregisterListing
+      security:
+        - signingEnvelope: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeregisterListing"
+      responses:
+        "204":
+          description: Removed
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/listings/{poolId}/heartbeat:
+    parameters:
+      - $ref: "#/components/parameters/chainHeader"
+      - $ref: "#/components/parameters/poolId"
+    post:
+      tags: [listings]
+      summary: Heartbeat
+      operationId: heartbeatListing
+      security:
+        - signingEnvelope: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HeartbeatListing"
+      responses:
+        "204":
+          description: Recorded
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/stake-preview:
+    get:
+      tags: [stake]
+      summary: Stake preview (fills stake cache)
+      operationId: stakePreview
+      parameters:
+        - $ref: "#/components/parameters/chainHeader"
+        - name: wallet
+          in: query
+          required: true
+          schema:
+            type: string
+            maxLength: 90
+      responses:
+        "200":
+          description: StakeReady, StakeWaiting, or StakeInsufficient
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StakePreviewResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/listings/{poolId}/reviews:
+    parameters:
+      - $ref: "#/components/parameters/chainHeader"
+      - $ref: "#/components/parameters/poolId"
+    post:
+      tags: [reviews]
+      summary: Post one review (0-5 stars)
+      operationId: postReview
+      security:
+        - signingEnvelope: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostReview"
+      responses:
+        "201":
+          description: Created
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /v1/listings/{poolId}/reviews/{reviewerWallet}/rebuttal:
+    parameters:
+      - $ref: "#/components/parameters/chainHeader"
+      - $ref: "#/components/parameters/poolId"
+      - name: reviewerWallet
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 90
+    post:
+      tags: [reviews]
+      summary: One operator rebuttal
+      operationId: postRebuttal
+      security:
+        - signingEnvelope: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PostRebuttal"
+      responses:
+        "201":
+          description: Created
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+components:
+  securitySchemes:
+    signingEnvelope:
+      type: http
+      scheme: bearer
+      description: >
+        Base64url of SigningEnvelope JSON (RFC 8785 JCS payloadHash).
+        Not an IdP JWT. commandKind MUST match the route. chain MUST
+        equal X-FederationCoin-Chain.
+  parameters:
+    chainHeader:
+      name: X-FederationCoin-Chain
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [testnet, main]
+      description: Tenant. Not Authorization. Dummy MAIN is not live.
+    poolId:
+      name: poolId
+      in: path
+      required: true
+      schema:
+        type: string
+        maxLength: 64
+      description: Server-assigned ULID
+    cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        maxLength: 512
+      description: Opaque FindCursor from the previous page
+  headers:
+    RetryAfter:
+      schema:
+        type: integer
+      description: Seconds to wait
+  responses:
+    BadRequest:
+      description: Validation, chain, connect, or host failed
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: Missing Bearer, bad wallet, or signature
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Missing or reaped
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: Duplicate envelope hash or duplicate review
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    TooManyRequests:
+      description: Rate limit
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          maxLength: 256
+        title:
+          type: string
+          maxLength: 128
+        status:
+          type: integer
+        code:
+          $ref: "#/components/schemas/RegistryErrorCode"
+        detail:
+          type: string
+          maxLength: 512
+    RegistryErrorCode:
+      type: string
+      enum:
+        - missingChain
+        - unknownChain
+        - chainMismatch
+        - badEnvelope
+        - badWallet
+        - commandKindMismatch
+        - payloadHashMismatch
+        - badSignature
+        - tipWindow
+        - stakeInsufficient
+        - notOperator
+        - badHost
+        - rejectedPort
+        - badConnect
+        - unknownField
+        - duplicateEnvelope
+        - duplicateReview
+        - notFound
+        - rateLimited
+        - notReady
+    SigningEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+        - messageVersion
+        - commandKind
+        - chain
+        - wallet
+        - payloadHash
+        - signature
+        - signingBlockHash
+        - signingBlockHeight
+      properties:
+        messageVersion:
+          type: integer
+          minimum: 1
+        commandKind:
+          $ref: "#/components/schemas/CommandKind"
+        chain:
+          type: string
+          enum: [testnet, main]
+        wallet:
+          type: string
+          maxLength: 90
+        payloadHash:
+          type: string
+          minLength: 64
+          maxLength: 64
+          description: SHA-256 hex of RFC 8785 JCS command bytes
+        signature:
+          type: string
+          maxLength: 144
+          description: P2WPKH secp256k1 compact sig, base64url
+        signingBlockHash:
+          type: string
+          minLength: 64
+          maxLength: 64
+        signingBlockHeight:
+          type: integer
+          minimum: 0
+    CommandKind:
+      type: string
+      enum:
+        - registerListing
+        - updateListing
+        - heartbeatListing
+        - deregisterListing
+        - postReview
+        - postRebuttal
+    HostPort:
+      type: object
+      additionalProperties: false
+      required: [host, port]
+      properties:
+        host:
+          type: string
+          maxLength: 253
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    StratumWssAdvertise:
+      type: object
+      additionalProperties: false
+      required: [host, path]
+      properties:
+        host:
+          type: string
+          maxLength: 253
+        path:
+          type: string
+          maxLength: 128
+    StratumOnlyAdvertise:
+      type: object
+      additionalProperties: false
+      required: [kind, stratum]
+      properties:
+        kind:
+          type: string
+          enum: [stratumOnly]
+        stratum:
+          $ref: "#/components/schemas/HostPort"
+        wss:
+          $ref: "#/components/schemas/StratumWssAdvertise"
+    DatumOnlyAdvertise:
+      type: object
+      additionalProperties: false
+      required: [kind, datum]
+      properties:
+        kind:
+          type: string
+          enum: [datumOnly]
+        datum:
+          $ref: "#/components/schemas/HostPort"
+        wss:
+          $ref: "#/components/schemas/StratumWssAdvertise"
+    StratumAndDatumAdvertise:
+      type: object
+      additionalProperties: false
+      required: [kind, stratum, datum]
+      properties:
+        kind:
+          type: string
+          enum: [stratumAndDatum]
+        stratum:
+          $ref: "#/components/schemas/HostPort"
+        datum:
+          $ref: "#/components/schemas/HostPort"
+        wss:
+          $ref: "#/components/schemas/StratumWssAdvertise"
+    ListingConnect:
+      oneOf:
+        - $ref: "#/components/schemas/StratumOnlyAdvertise"
+        - $ref: "#/components/schemas/DatumOnlyAdvertise"
+        - $ref: "#/components/schemas/StratumAndDatumAdvertise"
+      discriminator:
+        propertyName: kind
+        mapping:
+          stratumOnly: "#/components/schemas/StratumOnlyAdvertise"
+          datumOnly: "#/components/schemas/DatumOnlyAdvertise"
+          stratumAndDatum: "#/components/schemas/StratumAndDatumAdvertise"
+    RegisterListing:
+      type: object
+      additionalProperties: false
+      required: [commandKind, name, connect]
+      properties:
+        commandKind:
+          type: string
+          enum: [registerListing]
+        name:
+          type: string
+          maxLength: 64
+        websiteUrl:
+          type: string
+          maxLength: 256
+          description: https only; absent means no website
+        distributionAlgo:
+          type: string
+          maxLength: 2000
+        templateWriteup:
+          type: string
+          maxLength: 2000
+        feeText:
+          type: string
+          maxLength: 2000
+        connect:
+          $ref: "#/components/schemas/ListingConnect"
+    UpdateListing:
+      type: object
+      additionalProperties: false
+      required: [commandKind, name, connect]
+      properties:
+        commandKind:
+          type: string
+          enum: [updateListing]
+        name:
+          type: string
+          maxLength: 64
+        websiteUrl:
+          type: string
+          maxLength: 256
+          description: https only; absent means no website
+        distributionAlgo:
+          type: string
+          maxLength: 2000
+        templateWriteup:
+          type: string
+          maxLength: 2000
+        feeText:
+          type: string
+          maxLength: 2000
+        connect:
+          $ref: "#/components/schemas/ListingConnect"
+    HeartbeatListing:
+      type: object
+      additionalProperties: false
+      required: [commandKind, poolId]
+      properties:
+        commandKind:
+          type: string
+          enum: [heartbeatListing]
+        poolId:
+          type: string
+          maxLength: 64
+    DeregisterListing:
+      type: object
+      additionalProperties: false
+      required: [commandKind, poolId]
+      properties:
+        commandKind:
+          type: string
+          enum: [deregisterListing]
+        poolId:
+          type: string
+          maxLength: 64
+    PostReview:
+      type: object
+      additionalProperties: false
+      required: [commandKind, starRating, text]
+      properties:
+        commandKind:
+          type: string
+          enum: [postReview]
+        starRating:
+          type: integer
+          minimum: 0
+          maximum: 5
+        text:
+          type: string
+          maxLength: 2000
+    PostRebuttal:
+      type: object
+      additionalProperties: false
+      required: [commandKind, text]
+      properties:
+        commandKind:
+          type: string
+          enum: [postRebuttal]
+        text:
+          type: string
+          maxLength: 2000
+    RegisterResult:
+      type: object
+      additionalProperties: false
+      required: [poolId]
+      properties:
+        poolId:
+          type: string
+          maxLength: 64
+    MetricSample:
+      type: object
+      additionalProperties: false
+      required: [at, blocksFound, hashrate]
+      properties:
+        at:
+          type: string
+          format: date-time
+        blocksFound:
+          type: integer
+          minimum: 0
+        hashrate:
+          type: number
+    MetricsOverlay:
+      type: object
+      additionalProperties: false
+      properties:
+        blocksFound:
+          type: integer
+          minimum: 0
+        hashrate:
+          type: number
+        volatility:
+          type: number
+        samples:
+          type: array
+          maxItems: 48
+          items:
+            $ref: "#/components/schemas/MetricSample"
+    ListingPublic:
+      type: object
+      additionalProperties: false
+      required:
+        - poolId
+        - chain
+        - operatorWallet
+        - name
+        - connect
+        - reviewScore
+        - hasHostileFlag
+      properties:
+        poolId:
+          type: string
+          maxLength: 64
+        chain:
+          type: string
+          enum: [testnet, main]
+        operatorWallet:
+          type: string
+          maxLength: 90
+        name:
+          type: string
+          maxLength: 64
+        websiteUrl:
+          type: string
+          maxLength: 256
+        distributionAlgo:
+          type: string
+          maxLength: 2000
+        templateWriteup:
+          type: string
+          maxLength: 2000
+        feeText:
+          type: string
+          maxLength: 2000
+        connect:
+          $ref: "#/components/schemas/ListingConnect"
+        coinbaseTag:
+          type: string
+          maxLength: 80
+          description: Observed; censored on read
+        metrics:
+          $ref: "#/components/schemas/MetricsOverlay"
+        reviewScore:
+          type: number
+        hasHostileFlag:
+          type: boolean
+        heartbeatAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    FindActivePage:
+      type: object
+      additionalProperties: false
+      required: [items, inactiveMatchHint]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ListingPublic"
+        cursor:
+          type: string
+          maxLength: 512
+        inactiveMatchHint:
+          type: boolean
+          description: Inactive set has query matches (always this meaning)
+    FindInactivePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ListingPublic"
+        cursor:
+          type: string
+          maxLength: 512
+    StakeReady:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [stakeReady]
+    StakeWaiting:
+      type: object
+      additionalProperties: false
+      required: [kind, qualifiesAtHeight]
+      properties:
+        kind:
+          type: string
+          enum: [stakeWaiting]
+        qualifiesAtHeight:
+          type: integer
+          minimum: 0
+    StakeInsufficient:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [stakeInsufficient]
+    StakePreviewResult:
+      oneOf:
+        - $ref: "#/components/schemas/StakeReady"
+        - $ref: "#/components/schemas/StakeWaiting"
+        - $ref: "#/components/schemas/StakeInsufficient"
+      discriminator:
+        propertyName: kind
+        mapping:
+          stakeReady: "#/components/schemas/StakeReady"
+          stakeWaiting: "#/components/schemas/StakeWaiting"
+          stakeInsufficient: "#/components/schemas/StakeInsufficient"

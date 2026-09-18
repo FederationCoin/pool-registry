@@ -1,0 +1,60 @@
+{{- if .Values.redis.enabled }}
+{{- $reg := required "registry is required" .Values.registry }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry-redis
+  labels:
+    app: federationcoin-registry-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: federationcoin-registry-redis
+  template:
+    metadata:
+      labels:
+        app: federationcoin-registry-redis
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: redis
+          image: {{ $reg }}/{{ .Values.redis.image }}:{{ .Values.redis.tag }}
+          args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.name }}
+                  key: redis-password
+          ports:
+            - name: redis
+              containerPort: 6379
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-redis
+spec:
+  type: ClusterIP
+  selector:
+    app: federationcoin-registry-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+{{- end }}
