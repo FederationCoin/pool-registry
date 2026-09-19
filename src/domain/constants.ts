@@ -1,4 +1,4 @@
-export const PACKAGE_VERSION = '0.1.0';
+export const PACKAGE_VERSION = '0.2.0';
 
 /** Pin: same prefix Sparrow / node signmessage use. */
 export const RegistrySignedMessageMagic = 'FederationCoin Signed Message:\n';
@@ -33,6 +33,8 @@ export const TokenChain = 'CHAIN';
 export const TokenEnvelope = 'ENVELOPE';
 export const TokenListingStore = 'ListingStore';
 export const TokenReviewStore = 'ReviewStore';
+export const TokenAttestationStore = 'AttestationStore';
+export const TokenTrustCache = 'TrustCache';
 export const TokenStakeCache = 'StakeCache';
 export const TokenPublicReadLimiter = 'PublicReadRateLimiter';
 export const TokenUnstakedWriteLimiter = 'UnstakedWriteRateLimiter';

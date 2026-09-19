@@ -5,6 +5,7 @@ export type DynamoListingSettings = {
   region: string;
   poolsTable: string;
   reviewsTable: string;
+  attestationsTable?: string;
 };
 
 export type MemoryListingSettings = {

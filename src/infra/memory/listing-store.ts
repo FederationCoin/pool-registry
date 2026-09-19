@@ -29,6 +29,11 @@ export class MemoryListingStore implements ListingStore {
     return row ? { ...row } : undefined;
   }
 
+  async getByOperator(chain: ChainId, wallet: string): Promise<ListingRecord | undefined> {
+    const row = [...this.rows.values()].find((r) => r.chain === chain && r.operatorWallet === wallet);
+    return row ? { ...row } : undefined;
+  }
+
   async delete(poolId: string): Promise<void> {
     this.rows.delete(poolId);
   }

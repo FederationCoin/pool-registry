@@ -3,6 +3,7 @@ import request from 'supertest';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  TokenAttestationStore,
   TokenChainView,
   TokenEnvelopeLog,
   TokenListingStore,
@@ -10,6 +11,7 @@ import {
   TokenReviewStore,
   TokenStakeCache,
   TokenStakedWriteLimiter,
+  TokenTrustCache,
   TokenUnstakedWriteLimiter,
 } from './domain/constants';
 import { ProblemFilter } from './http/problem.filter';
@@ -18,6 +20,7 @@ import { DocsController, HealthController } from './http/health.controller';
 import { ListingsService } from './listings/listings.service';
 import { MemoryListingStore } from './infra/memory/listing-store';
 import { MemoryReviewStore } from './infra/memory/review-store';
+import { MemoryAttestationStore } from './infra/memory/attestation-store';
 import { MemoryRateAdapters } from './infra/memory/rate';
 import { MemoryChainView } from './infra/memory/chain-view';
 import { bearer, signEnvelope, testKey } from './test-support';
@@ -28,6 +31,7 @@ import type { RegisterBody } from './listings/listings.service';
 async function appWith(chain = new MemoryChainView()) {
   const listings = new MemoryListingStore();
   const reviews = new MemoryReviewStore();
+  const attestations = new MemoryAttestationStore();
   const rates = new MemoryRateAdapters();
   const moduleRef = await Test.createTestingModule({
     controllers: [ListingsController, HealthController, DocsController],
@@ -37,7 +41,9 @@ async function appWith(chain = new MemoryChainView()) {
       AdminOverlayService,
       { provide: TokenListingStore, useValue: listings },
       { provide: TokenReviewStore, useValue: reviews },
+      { provide: TokenAttestationStore, useValue: attestations },
       { provide: TokenStakeCache, useValue: rates },
+      { provide: TokenTrustCache, useValue: rates },
       { provide: TokenPublicReadLimiter, useValue: rates },
       { provide: TokenUnstakedWriteLimiter, useValue: rates },
       { provide: TokenStakedWriteLimiter, useValue: rates },
@@ -57,6 +63,8 @@ function registerCmd(): RegisterBody {
   return {
     commandKind: 'registerListing',
     name: 'Example Pool',
+    websiteUrl: 'https://example.com',
+    coinbaseTag: '/Example Pool/',
     connect: { kind: 'stratumAndDatum', stratum: { host: 'stratum.example.com', port: 23334 }, datum: { host: 'datum.example.com', port: 28916 } },
   };
 }
@@ -86,8 +94,9 @@ describe('http registry', () => {
     await request(app.getHttpServer()).get('/v1/readyz').expect(200);
     await request(app.getHttpServer()).get('/v1/docs').expect(200);
     const spec = await request(app.getHttpServer()).get('/v1/openapi.json').expect(200);
-    expect(spec.body.info.version).toBe('0.1.0');
+    expect(spec.body.info.version).toBe('0.2.0');
     expect(spec.body.paths['/v1/listings']).toBeTruthy();
+    expect(spec.body.paths['/v1/listings/{poolId}/attestations']).toBeTruthy();
   });
 
   it('rejects missing and main chain headers', async () => {
@@ -122,6 +131,9 @@ describe('http registry', () => {
     expect(found.body.inactiveMatchHint).toBe(false);
     expect(found.body.items[0].name).toBe('Example Pool');
     expect(found.body.items[0].hasHostileFlag).toBe(false);
+    expect(found.body.items[0].attestationCount).toBe(0);
+    expect(found.body.groups[0].domain).toBe('example.com');
+    expect(found.body.groups[0].listings[0].name).toBe('Example Pool');
 
     const one = await request(app.getHttpServer())
       .get(`/v1/listings/${created.body.poolId}`)
@@ -201,6 +213,8 @@ describe('http registry', () => {
     const upd = {
       commandKind: 'updateListing' as const,
       name: 'Example Pool',
+      websiteUrl: 'https://example.com',
+      coinbaseTag: '/Example Pool/',
       connect: { kind: 'stratumOnly' as const, stratum: { host: 'stratum.example.com', port: 23334 } },
     };
     const uEnv = signEnvelope({
@@ -243,6 +257,8 @@ describe('http registry', () => {
     const cmd: RegisterBody = {
       commandKind: 'registerListing',
       name: 'Bad',
+      websiteUrl: 'https://example.com',
+      coinbaseTag: '/Bad/',
       connect: { kind: 'stratumOnly', stratum: { host: '127.0.0.1', port: 23334 } },
     };
     const env = signEnvelope({
@@ -283,5 +299,80 @@ describe('http registry', () => {
       .set('X-FederationCoin-Chain', 'testnet')
       .set('X-Forwarded-For', '203.0.113.9, 10.0.0.1')
       .expect(200);
+  });
+
+  it('rejects mixed registrable domains', async () => {
+    const { priv, wallet } = testKey();
+    chain.state.balances.set(wallet, 10n ** 18n);
+    const cmd: RegisterBody = {
+      commandKind: 'registerListing',
+      name: 'Mixed',
+      websiteUrl: 'https://example.com',
+      coinbaseTag: '/Mixed/',
+      connect: { kind: 'stratumOnly', stratum: { host: 'stratum.other.com', port: 23334 } },
+    };
+    const env = signEnvelope({
+      priv,
+      wallet,
+      chain: 'testnet',
+      commandKind: 'registerListing',
+      command: cmd,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    const res = await request(app.getHttpServer())
+      .post('/v1/listings')
+      .set('X-FederationCoin-Chain', 'testnet')
+      .set('Authorization', bearer(env))
+      .send(cmd)
+      .expect(400);
+    expect(res.body.code).toBe('mixedDomain');
+  });
+
+  it('attests a proven coinbase over HTTP', async () => {
+    const operator = testKey();
+    const attester = testKey();
+    chain.state.balances.set(operator.wallet, 10n ** 18n);
+    chain.state.balances.set(attester.wallet, 10n ** 18n);
+    const cmd = registerCmd();
+    cmd.name = 'Http Attest';
+    cmd.coinbaseTag = '/Http Attest/';
+    const env = signEnvelope({
+      priv: operator.priv,
+      wallet: operator.wallet,
+      chain: 'testnet',
+      commandKind: 'registerListing',
+      command: cmd,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    const created = await request(app.getHttpServer())
+      .post('/v1/listings')
+      .set('X-FederationCoin-Chain', 'testnet')
+      .set('Authorization', bearer(env))
+      .send(cmd)
+      .expect(201);
+    chain.state.coinbases.set(chain.state.height, { tag: '/Http Attest/', addresses: [attester.wallet] });
+    const attest = { commandKind: 'attestListing' as const, poolId: created.body.poolId, height: chain.state.height };
+    const aEnv = signEnvelope({
+      priv: attester.priv,
+      wallet: attester.wallet,
+      chain: 'testnet',
+      commandKind: 'attestListing',
+      command: attest,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    await request(app.getHttpServer())
+      .post(`/v1/listings/${created.body.poolId}/attestations`)
+      .set('X-FederationCoin-Chain', 'testnet')
+      .set('Authorization', bearer(aEnv))
+      .send(attest)
+      .expect(201);
+    const one = await request(app.getHttpServer())
+      .get(`/v1/listings/${created.body.poolId}`)
+      .set('X-FederationCoin-Chain', 'testnet')
+      .expect(200);
+    expect(one.body.attestationCount).toBe(1);
   });
 });

@@ -3,6 +3,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import Redis from 'ioredis';
 import {
   TokenAdminOverlay,
+  TokenAttestationStore,
   TokenChainView,
   TokenEnvelopeLog,
   TokenListingStore,
@@ -12,11 +13,14 @@ import {
   TokenSettings,
   TokenStakeCache,
   TokenStakedWriteLimiter,
+  TokenTrustCache,
   TokenUnstakedWriteLimiter,
 } from '../domain/constants';
 import { AdminOverlayService } from '../cli/admin-overlay.service';
+import { DynamoAttestationStore } from './dynamo/attestation-store';
 import { DynamoListingStore } from './dynamo/listing-store';
 import { DynamoReviewStore } from './dynamo/review-store';
+import { MemoryAttestationStore } from './memory/attestation-store';
 import { MemoryChainView } from './memory/chain-view';
 import { MemoryListingStore } from './memory/listing-store';
 import { MemoryRateAdapters } from './memory/rate';
@@ -78,6 +82,18 @@ export function secretStoreFromEnv(): SecretStore {
       inject: [TokenSettings],
     },
     {
+      provide: TokenAttestationStore,
+      useFactory: (settings: RegistrySettings) => {
+        if (settings.listingStore.kind === 'dynamo') {
+          const client = new DynamoDBClient({ region: settings.listingStore.region });
+          const table = settings.listingStore.attestationsTable || 'federationcoin-registry-attestations';
+          return new DynamoAttestationStore(table, client);
+        }
+        return new MemoryAttestationStore();
+      },
+      inject: [TokenSettings],
+    },
+    {
       provide: 'RateBundle',
       useFactory: (settings: RegistrySettings) => {
         if (settings.cacheStore.kind === 'redis') {
@@ -89,6 +105,7 @@ export function secretStoreFromEnv(): SecretStore {
       inject: [TokenSettings],
     },
     { provide: TokenStakeCache, useExisting: 'RateBundle' },
+    { provide: TokenTrustCache, useExisting: 'RateBundle' },
     { provide: TokenPublicReadLimiter, useExisting: 'RateBundle' },
     { provide: TokenUnstakedWriteLimiter, useExisting: 'RateBundle' },
     { provide: TokenStakedWriteLimiter, useExisting: 'RateBundle' },
@@ -109,7 +126,9 @@ export function secretStoreFromEnv(): SecretStore {
   exports: [
     TokenListingStore,
     TokenReviewStore,
+    TokenAttestationStore,
     TokenStakeCache,
+    TokenTrustCache,
     TokenPublicReadLimiter,
     TokenUnstakedWriteLimiter,
     TokenStakedWriteLimiter,

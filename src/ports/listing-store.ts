@@ -9,6 +9,7 @@ export type ListingQueryPage = {
 export interface ListingStore {
   put(row: ListingRecord): Promise<void>;
   get(poolId: string): Promise<ListingRecord | undefined>;
+  getByOperator(chain: ChainId, wallet: string): Promise<ListingRecord | undefined>;
   delete(poolId: string): Promise<void>;
   queryActive(chain: ChainId, q?: string, cursor?: string): Promise<ListingQueryPage>;
   queryInactive(chain: ChainId, q?: string, cursor?: string): Promise<ListingQueryPage>;

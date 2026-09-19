@@ -5,6 +5,25 @@ export function normalizeName(name: string): string {
   return name.trim().toLowerCase();
 }
 
+export function assertCoinbaseTag(tag: string | undefined): string {
+  if (!tag) {
+    throw new RegistryProblem(400, 'unknownField', 'coinbaseTag is required');
+  }
+  const t = tag.trim();
+  if (!t || t.length > 80) {
+    throw new RegistryProblem(400, 'unknownField', 'coinbaseTag is invalid');
+  }
+  assertReviewTextAllowed(t);
+  return t;
+}
+
+export function coinbaseHasDeclaredTag(observed: string | undefined, declared: string): boolean {
+  if (!observed || !declared) {
+    return false;
+  }
+  return observed.includes(declared);
+}
+
 export function assertListingNameAllowed(name: string): void {
   if (!name || name.length > 64) {
     throw new RegistryProblem(400, 'unknownField', 'name is invalid');

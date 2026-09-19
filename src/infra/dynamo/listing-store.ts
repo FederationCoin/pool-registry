@@ -34,6 +34,18 @@ export class DynamoListingStore implements ListingStore {
     return out.Item as ListingRecord | undefined;
   }
 
+  async getByOperator(chain: ChainId, wallet: string): Promise<ListingRecord | undefined> {
+    const out = await this.doc.send(
+      new QueryCommand({
+        TableName: this.table,
+        IndexName: 'OperatorWallet',
+        KeyConditionExpression: 'operatorWallet = :w',
+        ExpressionAttributeValues: { ':w': wallet },
+      }),
+    );
+    return ((out.Items ?? []) as ListingRecord[]).find((r) => r.chain === chain);
+  }
+
   async delete(poolId: string): Promise<void> {
     await this.doc.send(new DeleteCommand({ TableName: this.table, Key: { poolId } }));
   }

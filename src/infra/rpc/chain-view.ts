@@ -169,4 +169,13 @@ export class RpcChainView implements ChainView {
     const addresses = cb.vout.map((o) => o.scriptpubkey_address).filter((a): a is string => !!a);
     return { tag: tag || undefined, addresses };
   }
+
+  async inspectCoinbaseWindow(chain: ChainId, fromHeight: number, toHeight: number) {
+    const out: { height: number; tag?: string; addresses: string[] }[] = [];
+    for (let h = fromHeight; h <= toHeight; h++) {
+      const cb = await this.inspectCoinbase(chain, h);
+      out.push({ height: h, ...cb });
+    }
+    return out;
+  }
 }

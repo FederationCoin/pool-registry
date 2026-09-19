@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { LiveTenants, TokenChainView, TokenListingStore, type ChainId } from '../domain/constants';
 import { pushSample } from '../domain/metrics';
+import { coinbaseHasDeclaredTag } from '../domain/text';
 import type { ChainView } from '../ports/chain-view';
 import type { ListingStore } from '../ports/listing-store';
 import { ListingsService } from '../listings/listings.service';
@@ -31,25 +32,24 @@ export class ObservationService {
     const coinbase = await this.chain.inspectCoinbase(chain, tip.height);
     const now = new Date().toISOString();
     for (const row of rows) {
-      const tagHit = row.name && coinbase.tag && coinbase.tag.includes(row.name.slice(0, 8));
+      const tagHit = coinbaseHasDeclaredTag(coinbase.tag, row.coinbaseTag);
       const addrHit = coinbase.addresses.includes(row.operatorWallet);
-      if (!tagHit && !addrHit) {
+      if (tagHit || addrHit) {
+        const next = {
+          ...row,
+          lastAttributedBlockAt: now,
+        };
+        delete next.hiddenAt;
+        next.metrics = pushSample(row.metrics, {
+          at: now,
+          blocksFound: 1,
+          hashrate: hashps,
+        });
+        await this.listings.put(next);
+        await this.listingsApi.refreshTrust(next);
         continue;
       }
-      const next = {
-        ...row,
-        coinbaseTag: coinbase.tag,
-        lastAttributedBlockAt: now,
-      };
-      delete next.hiddenAt;
-      const attributed = rows.filter((r) => r.poolId === row.poolId).length;
-      void attributed;
-      next.metrics = pushSample(row.metrics, {
-        at: now,
-        blocksFound: 1,
-        hashrate: hashps,
-      });
-      await this.listings.put(next);
+      await this.listingsApi.refreshTrust(row);
     }
   }
 }

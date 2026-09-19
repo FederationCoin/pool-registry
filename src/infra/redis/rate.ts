@@ -1,7 +1,8 @@
 import Redis from 'ioredis';
 import type { ChainId } from '../../domain/constants';
-import type { StakeCacheRow } from '../../domain/types';
+import type { ListingTrustRow, StakeCacheRow } from '../../domain/types';
 import type { StakeCache } from '../../ports/stake-cache';
+import type { TrustCache } from '../../ports/trust-cache';
 import type {
   EnvelopeLog,
   PublicReadRateLimiter,
@@ -12,7 +13,13 @@ import type {
 import { DifficultyPeriodBlocks, TargetSpacingSeconds } from '../../domain/constants';
 
 export class RedisRateAdapters
-  implements PublicReadRateLimiter, UnstakedWriteRateLimiter, StakedWriteRateLimiter, EnvelopeLog, StakeCache
+  implements
+    PublicReadRateLimiter,
+    UnstakedWriteRateLimiter,
+    StakedWriteRateLimiter,
+    EnvelopeLog,
+    StakeCache,
+    TrustCache
 {
   constructor(private readonly redis: Redis) {}
 
@@ -70,5 +77,19 @@ export class RedisRateAdapters
       }
     }
     await this.redis.set(key, JSON.stringify(row), 'EX', DifficultyPeriodBlocks * TargetSpacingSeconds);
+  }
+
+  async getTrust(chain: ChainId, poolId: string): Promise<ListingTrustRow | undefined> {
+    const raw = await this.redis.get(`tr:${chain}:${poolId}`);
+    return raw ? (JSON.parse(raw) as ListingTrustRow) : undefined;
+  }
+
+  async putTrust(row: ListingTrustRow): Promise<void> {
+    await this.redis.set(
+      `tr:${row.chain}:${row.poolId}`,
+      JSON.stringify(row),
+      'EX',
+      DifficultyPeriodBlocks * TargetSpacingSeconds,
+    );
   }
 }

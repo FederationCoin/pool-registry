@@ -3,9 +3,11 @@ import { ulid } from 'ulid';
 import {
   CommandBodyCapBytes,
   DifficultyPeriodBlocks,
+  FindPageSize,
   HiddenAfterMs,
   LiveTenants,
   TargetSpacingSeconds,
+  TokenAttestationStore,
   TokenChainView,
   TokenEnvelopeLog,
   TokenListingStore,
@@ -13,25 +15,29 @@ import {
   TokenReviewStore,
   TokenStakeCache,
   TokenStakedWriteLimiter,
+  TokenTrustCache,
   TokenUnstakedWriteLimiter,
   type ChainId,
 } from '../domain/constants';
 import { assertEnvelope } from '../domain/envelope';
-import { assertListingConnect, assertWebsiteUrl } from '../domain/host';
+import { assertBrandAndConnect, assertListingConnect, assertWebsiteUrl } from '../domain/host';
 import { assertP2wpkh } from '../domain/wallet';
-import { compareFind } from '../domain/rank';
-import { assertTipWindow, evaluateStake, stakeRequiredSats, tipWindow } from '../domain/stake';
-import { assertListingNameAllowed, censorTagForDisplay, normalizeName } from '../domain/text';
+import { compareFind, decodeCursor, encodeCursor, groupFind } from '../domain/rank';
+import { assertTipWindow, evaluateStake, isLiveAt, stakeRequiredSats, tipWindow } from '../domain/stake';
+import { assertCoinbaseTag, assertListingNameAllowed, censorTagForDisplay, coinbaseHasDeclaredTag, normalizeName } from '../domain/text';
 import { jcs, sha256Hex } from '../domain/jcs';
 import {
   RegistryProblem,
   type CommandKind,
+  type FindGroup,
   type ListingConnect,
   type ListingPublic,
   type ListingRecord,
+  type ListingTrustRow,
   type SigningEnvelope,
   type StakePreviewResult,
 } from '../domain/types';
+import type { AttestationStore } from '../ports/attestation-store';
 import type { ChainView } from '../ports/chain-view';
 import type { ListingStore } from '../ports/listing-store';
 import type {
@@ -42,11 +48,13 @@ import type {
 } from '../ports/rate-limit';
 import type { ReviewStore } from '../ports/review-store';
 import type { StakeCache } from '../ports/stake-cache';
+import type { TrustCache } from '../ports/trust-cache';
 
 export type RegisterBody = {
   commandKind: 'registerListing';
   name: string;
-  websiteUrl?: string;
+  websiteUrl: string;
+  coinbaseTag: string;
   distributionAlgo?: string;
   templateWriteup?: string;
   feeText?: string;
@@ -56,11 +64,18 @@ export type RegisterBody = {
 export type UpdateBody = {
   commandKind: 'updateListing';
   name: string;
-  websiteUrl?: string;
+  websiteUrl: string;
+  coinbaseTag: string;
   distributionAlgo?: string;
   templateWriteup?: string;
   feeText?: string;
   connect: ListingConnect;
+};
+
+export type AttestBody = {
+  commandKind: 'attestListing';
+  poolId: string;
+  height: number;
 };
 
 @Injectable()
@@ -68,11 +83,13 @@ export class ListingsService {
   constructor(
     @Inject(TokenListingStore) private readonly listings: ListingStore,
     @Inject(TokenReviewStore) private readonly reviews: ReviewStore,
+    @Inject(TokenAttestationStore) private readonly attestations: AttestationStore,
     @Inject(TokenStakeCache) private readonly stakeCache: StakeCache,
     @Inject(TokenPublicReadLimiter) private readonly publicLimit: PublicReadRateLimiter,
     @Inject(TokenUnstakedWriteLimiter) private readonly unstaked: UnstakedWriteRateLimiter,
     @Inject(TokenStakedWriteLimiter) private readonly staked: StakedWriteRateLimiter,
     @Inject(TokenEnvelopeLog) private readonly envelopes: EnvelopeLog,
+    @Inject(TokenTrustCache) private readonly trust: TrustCache,
     @Inject(TokenChainView) private readonly chain: ChainView,
   ) {}
 
@@ -89,22 +106,49 @@ export class ListingsService {
     }
   }
 
+  async refreshTrust(row: ListingRecord): Promise<ListingTrustRow> {
+    const tip = await this.chain.getTip(row.chain);
+    const from = Math.max(0, tip.height - DifficultyPeriodBlocks + 1);
+    const window = await this.chain.inspectCoinbaseWindow(row.chain, from, tip.height);
+    const listerConfirmedCoinbasePayee = window.some(
+      (cb) => coinbaseHasDeclaredTag(cb.tag, row.coinbaseTag) && cb.addresses.includes(row.operatorWallet),
+    );
+    const attestationCount = (await this.attestations.listByPool(row.poolId)).length;
+    const next: ListingTrustRow = {
+      chain: row.chain,
+      poolId: row.poolId,
+      asOfHeight: tip.height,
+      attestationCount,
+      listerConfirmedCoinbasePayee,
+    };
+    await this.trust.putTrust(next);
+    return next;
+  }
+
   async toPublic(row: ListingRecord): Promise<ListingPublic> {
     const revs = await this.reviews.listByPool(row.poolId);
     const scores = revs.map((r) => r.starRating);
     const reviewScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
     const hasHostileFlag = revs.some((r) => r.rebuttal?.hostileFlag && !r.rebuttal.hostileFlag.withdrawnAt);
+    const tip = await this.chain.getTip(row.chain);
+    let trust = await this.trust.getTrust(row.chain, row.poolId);
+    if (!trust || trust.asOfHeight !== tip.height) {
+      trust = await this.refreshTrust(row);
+    }
     return {
       poolId: row.poolId,
       chain: row.chain,
       operatorWallet: row.operatorWallet,
       name: row.name,
-      ...(row.websiteUrl ? { websiteUrl: row.websiteUrl } : {}),
+      websiteUrl: row.websiteUrl,
       ...(row.distributionAlgo ? { distributionAlgo: row.distributionAlgo } : {}),
       ...(row.templateWriteup ? { templateWriteup: row.templateWriteup } : {}),
       ...(row.feeText ? { feeText: row.feeText } : {}),
       connect: row.connect,
-      ...(row.coinbaseTag ? { coinbaseTag: censorTagForDisplay(row.coinbaseTag) } : {}),
+      coinbaseTag: censorTagForDisplay(row.coinbaseTag),
+      listingDomain: row.listingDomain,
+      attestationCount: trust.attestationCount,
+      listerConfirmedCoinbasePayee: trust.listerConfirmedCoinbasePayee,
       ...(row.metrics ? { metrics: row.metrics } : {}),
       reviewScore,
       hasHostileFlag,
@@ -113,21 +157,54 @@ export class ListingsService {
     };
   }
 
+  private pageGroups(groups: FindGroup[], cursor: string | undefined) {
+    const decoded = decodeCursor(cursor);
+    const start = typeof decoded?.i === 'number' ? decoded.i : 0;
+    const page = groups.slice(start, start + FindPageSize);
+    const next = start + FindPageSize < groups.length ? encodeCursor({ i: start + FindPageSize }) : undefined;
+    return { groups: page, items: page.flatMap((g) => g.listings), cursor: next };
+  }
+
   async findActive(chain: ChainId, q: string | undefined, cursor: string | undefined, ip: string) {
     this.assertLiveTenant(chain);
     await this.ratePublic(ip);
-    const page = await this.listings.queryActive(chain, q, cursor);
-    const items = (await Promise.all(page.items.map((r) => this.toPublic(r)))).sort(compareFind);
+    const now = Date.now();
+    let rows = (await this.listings.listAll(chain)).filter(
+      (r) => !r.hiddenAt && isLiveAt(r.createdAt, r.lastAttributedBlockAt, now),
+    );
+    if (q) {
+      const needle = q.toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          r.name.toLowerCase().includes(needle) ||
+          r.poolId.toLowerCase().includes(needle) ||
+          r.coinbaseTag.toLowerCase().includes(needle),
+      );
+    }
+    const items = (await Promise.all(rows.map((r) => this.toPublic(r)))).sort(compareFind);
+    const paged = this.pageGroups(groupFind(items), cursor);
     const inactive = await this.listings.queryInactive(chain, q);
-    return { items, cursor: page.nextCursor, inactiveMatchHint: inactive.items.length > 0 };
+    return { ...paged, inactiveMatchHint: inactive.items.length > 0 };
   }
 
   async findInactive(chain: ChainId, q: string | undefined, cursor: string | undefined, ip: string) {
     this.assertLiveTenant(chain);
     await this.ratePublic(ip);
-    const page = await this.listings.queryInactive(chain, q, cursor);
-    const items = (await Promise.all(page.items.map((r) => this.toPublic(r)))).sort(compareFind);
-    return { items, cursor: page.nextCursor };
+    const now = Date.now();
+    let rows = (await this.listings.listAll(chain)).filter(
+      (r) => !!r.hiddenAt || !isLiveAt(r.createdAt, r.lastAttributedBlockAt, now),
+    );
+    if (q) {
+      const needle = q.toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          r.name.toLowerCase().includes(needle) ||
+          r.poolId.toLowerCase().includes(needle) ||
+          r.coinbaseTag.toLowerCase().includes(needle),
+      );
+    }
+    const items = (await Promise.all(rows.map((r) => this.toPublic(r)))).sort(compareFind);
+    return this.pageGroups(groupFind(items), cursor);
   }
 
   async getOne(chain: ChainId, poolId: string, ip: string): Promise<ListingPublic> {
@@ -148,14 +225,25 @@ export class ListingsService {
     return preview;
   }
 
+  private prepareListingFields(body: RegisterBody | UpdateBody) {
+    assertListingNameAllowed(body.name);
+    const websiteUrl = assertWebsiteUrl(body.websiteUrl);
+    const connect = assertListingConnect(body.connect);
+    const listingDomain = assertBrandAndConnect(websiteUrl, connect);
+    const coinbaseTag = assertCoinbaseTag(body.coinbaseTag);
+    return { websiteUrl, connect, listingDomain, coinbaseTag };
+  }
+
   async register(chain: ChainId, env: SigningEnvelope, body: RegisterBody, ip: string) {
     this.assertLiveTenant(chain);
     this.assertCommandSize(body);
     assertEnvelope(env, chain, 'registerListing', body);
+    const fields = this.prepareListingFields(body);
     await this.gateWrite(chain, env, ip);
-    assertListingNameAllowed(body.name);
-    assertWebsiteUrl(body.websiteUrl);
-    const connect = assertListingConnect(body.connect);
+    const existing = await this.listings.getByOperator(chain, env.wallet);
+    if (existing) {
+      throw new RegistryProblem(409, 'duplicateListing', 'This wallet already has a listing');
+    }
     const createdAt = new Date().toISOString();
     const { check } = await this.computeStake(chain, env.wallet, env.signingBlockHeight, env.signingBlockHash);
     if (check.kind === 'openSeason' && !check.metMinBalance) {
@@ -171,17 +259,20 @@ export class ListingsService {
       operatorWallet: env.wallet,
       name: body.name.trim(),
       nameNormalized: normalizeName(body.name),
-      ...(body.websiteUrl ? { websiteUrl: body.websiteUrl } : {}),
+      websiteUrl: fields.websiteUrl,
       ...(body.distributionAlgo ? { distributionAlgo: body.distributionAlgo } : {}),
       ...(body.templateWriteup ? { templateWriteup: body.templateWriteup } : {}),
       ...(body.feeText ? { feeText: body.feeText } : {}),
-      connect,
+      connect: fields.connect,
+      coinbaseTag: fields.coinbaseTag,
+      listingDomain: fields.listingDomain,
       lastAttributedBlockAt: createdAt,
       createdAt,
       stakeCheck: check,
       registrationEnvelope: env,
     };
     await this.listings.put(row);
+    await this.refreshTrust(row);
     return { poolId };
   }
 
@@ -189,25 +280,23 @@ export class ListingsService {
     this.assertLiveTenant(chain);
     this.assertCommandSize(body);
     assertEnvelope(env, chain, 'updateListing', body);
+    const fields = this.prepareListingFields(body);
     await this.gateWrite(chain, env, ip);
     const row = await this.requireOperator(chain, poolId, env.wallet);
-    assertListingNameAllowed(body.name);
-    assertWebsiteUrl(body.websiteUrl);
-    const connect = assertListingConnect(body.connect);
     const next: ListingRecord = {
       ...row,
       name: body.name.trim(),
       nameNormalized: normalizeName(body.name),
-      websiteUrl: body.websiteUrl,
+      websiteUrl: fields.websiteUrl,
       distributionAlgo: body.distributionAlgo,
       templateWriteup: body.templateWriteup,
       feeText: body.feeText,
-      connect,
+      connect: fields.connect,
+      coinbaseTag: fields.coinbaseTag,
+      listingDomain: fields.listingDomain,
     };
-    if (!body.websiteUrl) {
-      delete next.websiteUrl;
-    }
     await this.listings.put(next);
+    await this.refreshTrust(next);
     return this.toPublic(next);
   }
 
@@ -292,6 +381,49 @@ export class ListingsService {
     await this.reviews.put(review);
   }
 
+  async attestListing(chain: ChainId, poolId: string, env: SigningEnvelope, body: AttestBody, ip: string) {
+    this.assertLiveTenant(chain);
+    this.assertCommandSize(body);
+    assertEnvelope(env, chain, 'attestListing', body);
+    await this.gateWrite(chain, env, ip);
+    if (body.poolId !== poolId) {
+      throw new RegistryProblem(400, 'unknownField', 'poolId does not match');
+    }
+    if (!Number.isInteger(body.height) || body.height < 0) {
+      throw new RegistryProblem(400, 'unknownField', 'height is invalid');
+    }
+    const listing = await this.listings.get(poolId);
+    if (!listing || listing.chain !== chain) {
+      throw new RegistryProblem(404, 'notFound', 'Listing was not found');
+    }
+    const tip = await this.chain.getTip(chain);
+    const from = Math.max(0, tip.height - DifficultyPeriodBlocks + 1);
+    if (body.height < from || body.height > tip.height) {
+      throw new RegistryProblem(400, 'attestationUnproven', 'Coinbase height is outside the last difficulty window');
+    }
+    const cb = await this.chain.inspectCoinbase(chain, body.height);
+    if (!coinbaseHasDeclaredTag(cb.tag, listing.coinbaseTag) || !cb.addresses.includes(env.wallet)) {
+      throw new RegistryProblem(
+        400,
+        'attestationUnproven',
+        'Coinbase at that height does not show this listing tag paying the attester',
+      );
+    }
+    const existing = await this.attestations.get(env.wallet, poolId);
+    if (existing) {
+      throw new RegistryProblem(409, 'duplicateAttestation', 'This wallet already attested this listing');
+    }
+    await this.attestations.put({
+      attesterWallet: env.wallet,
+      poolId,
+      chain,
+      height: body.height,
+      createdAt: new Date().toISOString(),
+      envelope: env,
+    });
+    await this.refreshTrust(listing);
+  }
+
   private assertCommandSize(body: unknown): void {
     if (Buffer.byteLength(jcs(body), 'utf8') > CommandBodyCapBytes) {
       throw new RegistryProblem(400, 'unknownField', 'Command is too large');
@@ -304,7 +436,7 @@ export class ListingsService {
       throw new RegistryProblem(404, 'notFound', 'Listing was not found');
     }
     if (row.operatorWallet !== wallet) {
-      throw new RegistryProblem(401, 'notOperator', 'Wallet does not operate this listing');
+      throw new RegistryProblem(401, 'notOperator', 'Wallet does not own this listing');
     }
     return row;
   }
@@ -382,7 +514,7 @@ export class ListingsService {
   async hideExpired(chain: ChainId, now = Date.now()): Promise<void> {
     const rows = await this.listings.listAll(chain);
     for (const row of rows) {
-      const attr = row.coinbaseTag ? Date.parse(row.lastAttributedBlockAt ?? row.createdAt) : Date.parse(row.createdAt);
+      const attr = Date.parse(row.lastAttributedBlockAt ?? row.createdAt);
       const age = now - attr;
       if (row.lastAttributedBlockAt && !row.hiddenAt && age >= HiddenAfterMs) {
         const next = { ...row, hiddenAt: new Date(now).toISOString() };

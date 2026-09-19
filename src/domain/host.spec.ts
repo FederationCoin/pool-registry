@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { assertListingConnect, assertPublicAdvertiseHost, assertWebsiteUrl } from './host';
+import {
+  assertBrandAndConnect,
+  assertListingConnect,
+  assertPublicAdvertiseHost,
+  assertWebsiteUrl,
+  registrableDomain,
+} from './host';
 import { RegistryProblem } from './types';
 
 describe('host', () => {
@@ -48,6 +54,26 @@ describe('host', () => {
         kind: 'stratumOnly',
         stratum: { host: 'pool.example.com', port: 23334 },
         wss: { host: 'wss.example.com', path: 'no-slash' },
+      }),
+    ).toThrow(RegistryProblem);
+  });
+
+  it('requires https websiteUrl and same registrable domain for brand and connect', () => {
+    expect(() => assertWebsiteUrl(undefined)).toThrow(RegistryProblem);
+    expect(registrableDomain('stratum.example.com')).toBe('example.com');
+    expect(registrableDomain('pool.co.uk')).toBe('pool.co.uk');
+    expect(registrableDomain('a.pool.co.uk')).toBe('pool.co.uk');
+    expect(
+      assertBrandAndConnect('https://example.com/pool', {
+        kind: 'stratumAndDatum',
+        stratum: { host: 'stratum.example.com', port: 23334 },
+        datum: { host: 'datum.example.com', port: 28916 },
+      }),
+    ).toBe('example.com');
+    expect(() =>
+      assertBrandAndConnect('https://example.com', {
+        kind: 'stratumOnly',
+        stratum: { host: 'stratum.other.com', port: 23334 },
       }),
     ).toThrow(RegistryProblem);
   });

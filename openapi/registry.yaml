@@ -1,16 +1,18 @@
 openapi: 3.0.3
 info:
   title: FederationCoin pool registry
-  version: 0.1.0
+  version: 0.2.0
   description: >
-    Frozen /v1. Self-hostable NestJS registry
+    Frozen /v1 (0.2.0 post-impl). Self-hostable NestJS registry
     (FederationCoin/pool-registry), not federation-pool WSS. Domain
     operations require X-FederationCoin-Chain (testnet or main). Writes
     also require Authorization Bearer (base64url SigningEnvelope JSON),
     not an IdP JWT. CORS origins come from SecretStore (origin mill:
     mine.federationcoin.org); no wildcard; no credentials. Dummy MAIN is
     not launched. additionalProperties false. Opaque FindCursor. ListingConnect
-    is oneOf three kinds.
+    is oneOf three kinds. websiteUrl and coinbaseTag are required writes.
+    Brand, Stratum, and DATUM share one registrable domain. Find groups by
+    that domain and ranks attestations.
 servers:
   - url: https://pools.federationcoin.org
     description: Origin hosted instance on the shared ALB (when epic 2 executes)
@@ -24,6 +26,7 @@ tags:
   - name: stake
   - name: listings
   - name: reviews
+  - name: attestations
 paths:
   /v1/openapi.json:
     get:
@@ -266,6 +269,33 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  /v1/listings/{poolId}/attestations:
+    parameters:
+      - $ref: "#/components/parameters/chainHeader"
+      - $ref: "#/components/parameters/poolId"
+    post:
+      tags: [attestations]
+      summary: Attest that advertised connect worked
+      operationId: attestListing
+      security:
+        - signingEnvelope: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttestListing"
+      responses:
+        "201":
+          description: Created
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /v1/listings/{poolId}/reviews:
     parameters:
       - $ref: "#/components/parameters/chainHeader"
@@ -437,6 +467,10 @@ components:
         - unknownField
         - duplicateEnvelope
         - duplicateReview
+        - duplicateListing
+        - duplicateAttestation
+        - mixedDomain
+        - attestationUnproven
         - notFound
         - rateLimited
         - notReady
@@ -489,6 +523,7 @@ components:
         - deregisterListing
         - postReview
         - postRebuttal
+        - attestListing
     HostPort:
       type: object
       additionalProperties: false
@@ -564,7 +599,7 @@ components:
     RegisterListing:
       type: object
       additionalProperties: false
-      required: [commandKind, name, connect]
+      required: [commandKind, name, websiteUrl, coinbaseTag, connect]
       properties:
         commandKind:
           type: string
@@ -575,7 +610,11 @@ components:
         websiteUrl:
           type: string
           maxLength: 256
-          description: https only; absent means no website
+          description: https only; required; host must share eTLD+1 with connect
+        coinbaseTag:
+          type: string
+          maxLength: 80
+          description: Declared write field; censored on read
         distributionAlgo:
           type: string
           maxLength: 2000
@@ -590,7 +629,7 @@ components:
     UpdateListing:
       type: object
       additionalProperties: false
-      required: [commandKind, name, connect]
+      required: [commandKind, name, websiteUrl, coinbaseTag, connect]
       properties:
         commandKind:
           type: string
@@ -601,7 +640,11 @@ components:
         websiteUrl:
           type: string
           maxLength: 256
-          description: https only; absent means no website
+          description: https only; required; host must share eTLD+1 with connect
+        coinbaseTag:
+          type: string
+          maxLength: 80
+          description: Declared write field; censored on read
         distributionAlgo:
           type: string
           maxLength: 2000
@@ -661,6 +704,21 @@ components:
         text:
           type: string
           maxLength: 2000
+    AttestListing:
+      type: object
+      additionalProperties: false
+      required: [commandKind, poolId, height]
+      properties:
+        commandKind:
+          type: string
+          enum: [attestListing]
+        poolId:
+          type: string
+          maxLength: 64
+        height:
+          type: integer
+          minimum: 0
+          description: Coinbase height in the last difficulty window with listing tag and attester payee
     RegisterResult:
       type: object
       additionalProperties: false
@@ -706,7 +764,12 @@ components:
         - chain
         - operatorWallet
         - name
+        - websiteUrl
         - connect
+        - coinbaseTag
+        - listingDomain
+        - attestationCount
+        - listerConfirmedCoinbasePayee
         - reviewScore
         - hasHostileFlag
       properties:
@@ -719,6 +782,7 @@ components:
         operatorWallet:
           type: string
           maxLength: 90
+          description: Listing committer (envelope signer), not proven process owner
         name:
           type: string
           maxLength: 64
@@ -739,7 +803,17 @@ components:
         coinbaseTag:
           type: string
           maxLength: 80
-          description: Observed; censored on read
+          description: Declared; censored on read
+        listingDomain:
+          type: string
+          maxLength: 253
+          description: eTLD+1 shared by website and advertised connect hosts
+        attestationCount:
+          type: integer
+          minimum: 0
+        listerConfirmedCoinbasePayee:
+          type: boolean
+          description: Always present. True iff last difficulty window has listing tag and listing wallet as a coinbase payee
         metrics:
           $ref: "#/components/schemas/MetricsOverlay"
         reviewScore:
@@ -752,15 +826,34 @@ components:
         createdAt:
           type: string
           format: date-time
+    FindGroup:
+      type: object
+      additionalProperties: false
+      required: [domain, listings, multipleClaims]
+      properties:
+        domain:
+          type: string
+          maxLength: 253
+        listings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ListingPublic"
+        multipleClaims:
+          type: boolean
+          description: Always present. True when more than one listing shares this registrable domain
     FindActivePage:
       type: object
       additionalProperties: false
-      required: [items, inactiveMatchHint]
+      required: [items, groups, inactiveMatchHint]
       properties:
         items:
           type: array
           items:
             $ref: "#/components/schemas/ListingPublic"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/FindGroup"
         cursor:
           type: string
           maxLength: 512
@@ -770,12 +863,16 @@ components:
     FindInactivePage:
       type: object
       additionalProperties: false
-      required: [items]
+      required: [items, groups]
       properties:
         items:
           type: array
           items:
             $ref: "#/components/schemas/ListingPublic"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/FindGroup"
         cursor:
           type: string
           maxLength: 512

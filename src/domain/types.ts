@@ -6,7 +6,8 @@ export type CommandKind =
   | 'heartbeatListing'
   | 'deregisterListing'
   | 'postReview'
-  | 'postRebuttal';
+  | 'postRebuttal'
+  | 'attestListing';
 
 export type HostPort = { host: string; port: number };
 export type StratumWssAdvertise = { host: string; path: string };
@@ -85,18 +86,28 @@ export type ReviewRecord = {
   rebuttal?: ReviewRebuttal;
 };
 
+export type AttestationRecord = {
+  attesterWallet: string;
+  poolId: string;
+  chain: ChainId;
+  createdAt: string;
+  height: number;
+  envelope: SigningEnvelope;
+};
+
 export type ListingRecord = {
   poolId: string;
   chain: ChainId;
   operatorWallet: string;
   name: string;
   nameNormalized: string;
-  websiteUrl?: string;
+  websiteUrl: string;
+  listingDomain: string;
   distributionAlgo?: string;
   templateWriteup?: string;
   feeText?: string;
   connect: ListingConnect;
-  coinbaseTag?: string;
+  coinbaseTag: string;
   lastAttributedBlockAt?: string;
   hiddenAt?: string;
   heartbeatAt?: string;
@@ -106,22 +117,39 @@ export type ListingRecord = {
   registrationEnvelope: SigningEnvelope;
 };
 
+export type ListingTrustRow = {
+  chain: ChainId;
+  poolId: string;
+  asOfHeight: number;
+  attestationCount: number;
+  listerConfirmedCoinbasePayee: boolean;
+};
+
 export type ListingPublic = {
   poolId: string;
   chain: ChainId;
   operatorWallet: string;
   name: string;
-  websiteUrl?: string;
+  websiteUrl: string;
+  listingDomain: string;
   distributionAlgo?: string;
   templateWriteup?: string;
   feeText?: string;
   connect: ListingConnect;
-  coinbaseTag?: string;
+  coinbaseTag: string;
   metrics?: MetricsOverlay;
   reviewScore: number;
   hasHostileFlag: boolean;
   heartbeatAt?: string;
   createdAt?: string;
+  attestationCount: number;
+  listerConfirmedCoinbasePayee: boolean;
+};
+
+export type FindGroup = {
+  domain: string;
+  listings: ListingPublic[];
+  multipleClaims: boolean;
 };
 
 export type StakeCacheRow = {
@@ -156,9 +184,13 @@ export type RegistryErrorCode =
   | 'unknownField'
   | 'duplicateEnvelope'
   | 'duplicateReview'
+  | 'duplicateListing'
+  | 'duplicateAttestation'
   | 'notFound'
   | 'rateLimited'
-  | 'notReady';
+  | 'notReady'
+  | 'mixedDomain'
+  | 'attestationUnproven';
 
 export type ProblemBody = {
   type: string;

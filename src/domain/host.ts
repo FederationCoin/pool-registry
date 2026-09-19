@@ -36,9 +36,62 @@ export function assertAdvertisePort(port: number): void {
   }
 }
 
-export function assertWebsiteUrl(url: string | undefined): void {
-  if (url === undefined) {
-    return;
+export const MixedRegistrableDomainTitle =
+  "Brand, Stratum, and DATUM must share one domain so a listing cannot point your brand at someone else's pool";
+export const MixedRegistrableDomainDetail =
+  'The leftover risk is a dead hostname or wrong port on a domain you already control, not a hijack onto a foreign pool.';
+
+const MULTI_PART_PUBLIC_SUFFIXES = new Set([
+  'co.uk',
+  'org.uk',
+  'ac.uk',
+  'gov.uk',
+  'com.au',
+  'net.au',
+  'org.au',
+  'co.nz',
+  'co.jp',
+  'com.br',
+  'com.mx',
+  'co.za',
+]);
+
+export function registrableDomain(host: string): string {
+  const h = host.trim().toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+  if (!h) {
+    throw new RegistryProblem(400, 'mixedDomain', MixedRegistrableDomainTitle, MixedRegistrableDomainDetail);
+  }
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(h) || h.includes(':')) {
+    return h;
+  }
+  const parts = h.split('.').filter(Boolean);
+  if (parts.length < 2) {
+    throw new RegistryProblem(400, 'mixedDomain', MixedRegistrableDomainTitle, MixedRegistrableDomainDetail);
+  }
+  const last2 = parts.slice(-2).join('.');
+  if (parts.length >= 3 && MULTI_PART_PUBLIC_SUFFIXES.has(last2)) {
+    return parts.slice(-3).join('.');
+  }
+  return last2;
+}
+
+export function advertiseHosts(connect: ListingConnect): string[] {
+  const hosts: string[] = [];
+  if (connect.kind === 'stratumOnly' || connect.kind === 'stratumAndDatum') {
+    hosts.push(connect.stratum.host);
+  }
+  if (connect.kind === 'datumOnly' || connect.kind === 'stratumAndDatum') {
+    hosts.push(connect.datum.host);
+  }
+  if (connect.wss) {
+    hosts.push(connect.wss.host);
+  }
+  return hosts;
+}
+
+export function assertWebsiteUrl(url: string | undefined): string {
+  if (!url) {
+    throw new RegistryProblem(400, 'badHost', 'websiteUrl is required');
   }
   if (url.length > 256) {
     throw new RegistryProblem(400, 'badHost', 'websiteUrl is too long');
@@ -56,6 +109,16 @@ export function assertWebsiteUrl(url: string | undefined): void {
     throw new RegistryProblem(400, 'badHost', 'websiteUrl must not include userinfo');
   }
   assertPublicAdvertiseHost(parsed.hostname);
+  return url;
+}
+
+export function assertBrandAndConnect(websiteUrl: string, connect: ListingConnect): string {
+  const websiteHost = new URL(websiteUrl).hostname;
+  const domains = new Set([registrableDomain(websiteHost), ...advertiseHosts(connect).map(registrableDomain)]);
+  if (domains.size !== 1) {
+    throw new RegistryProblem(400, 'mixedDomain', MixedRegistrableDomainTitle, MixedRegistrableDomainDetail);
+  }
+  return [...domains][0];
 }
 
 function assertHostPort(hp: HostPort): void {

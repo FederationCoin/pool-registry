@@ -13,6 +13,12 @@ export type WalletTx = {
   balanceAfterSats: bigint;
 };
 
+export type CoinbaseInspect = {
+  height: number;
+  tag?: string;
+  addresses: string[];
+};
+
 export interface ChainView {
   getTip(chain: ChainId): Promise<{ height: number; hash: string; nBits: number; subsidySats: bigint }>;
   getBlockHeader(chain: ChainId, hash: string): Promise<BlockHeader | undefined>;
@@ -21,4 +27,5 @@ export interface ChainView {
   lastRetargetMedianSpacingSeconds(chain: ChainId): Promise<number | undefined>;
   networkHashps(chain: ChainId): Promise<number>;
   inspectCoinbase(chain: ChainId, height: number): Promise<{ tag?: string; addresses: string[] }>;
+  inspectCoinbaseWindow(chain: ChainId, fromHeight: number, toHeight: number): Promise<CoinbaseInspect[]>;
 }

@@ -128,4 +128,18 @@ export class ListingsController {
     await this.listings.postRebuttal(chain, poolId, reviewerWallet, env, body, ip);
     res.status(201);
   }
+
+  @Post('listings/:poolId/attestations')
+  @UseGuards(ChainHeaderGuard, SigningEnvelopeGuard)
+  async attest(
+    @Chain() chain: ChainId,
+    @Param('poolId') poolId: string,
+    @Envelope() env: SigningEnvelope,
+    @Body() body: { commandKind: 'attestListing'; poolId: string; height: number },
+    @ClientIp() ip: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    await this.listings.attestListing(chain, poolId, env, body, ip);
+    res.status(201);
+  }
 }

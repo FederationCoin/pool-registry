@@ -1,5 +1,5 @@
 import { hasDatum } from './host';
-import type { ListingConnect, ListingPublic } from './types';
+import type { FindGroup, ListingConnect, ListingPublic } from './types';
 
 function datumRank(connect: ListingConnect): number {
   return hasDatum(connect) ? 0 : 1;
@@ -13,6 +13,12 @@ export function compareFind(a: ListingPublic, b: ListingPublic): number {
   const d = datumRank(a.connect) - datumRank(b.connect);
   if (d !== 0) {
     return d;
+  }
+  if (b.attestationCount !== a.attestationCount) {
+    return b.attestationCount - a.attestationCount;
+  }
+  if (a.listerConfirmedCoinbasePayee !== b.listerConfirmedCoinbasePayee) {
+    return a.listerConfirmedCoinbasePayee ? -1 : 1;
   }
   if (b.reviewScore !== a.reviewScore) {
     return b.reviewScore - a.reviewScore;
@@ -31,6 +37,33 @@ export function compareFind(a: ListingPublic, b: ListingPublic): number {
     return a.hasHostileFlag ? 1 : -1;
   }
   return a.poolId.localeCompare(b.poolId);
+}
+
+export function groupFind(items: ListingPublic[]): FindGroup[] {
+  const map = new Map<string, ListingPublic[]>();
+  for (const item of items) {
+    const cur = map.get(item.listingDomain) ?? [];
+    cur.push(item);
+    map.set(item.listingDomain, cur);
+  }
+  const groups: FindGroup[] = [];
+  for (const [domain, listings] of map) {
+    listings.sort(compareFind);
+    groups.push({
+      domain,
+      listings,
+      multipleClaims: listings.length > 1,
+    });
+  }
+  groups.sort((a, b) => {
+    const ac = Math.max(0, ...a.listings.map((l) => l.attestationCount));
+    const bc = Math.max(0, ...b.listings.map((l) => l.attestationCount));
+    if (bc !== ac) {
+      return bc - ac;
+    }
+    return a.domain.localeCompare(b.domain);
+  });
+  return groups;
 }
 
 export function encodeCursor(payload: unknown): string {

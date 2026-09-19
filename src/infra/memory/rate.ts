@@ -1,6 +1,7 @@
 import type { ChainId } from '../../domain/constants';
-import type { StakeCacheRow } from '../../domain/types';
+import type { ListingTrustRow, StakeCacheRow } from '../../domain/types';
 import type { StakeCache } from '../../ports/stake-cache';
+import type { TrustCache } from '../../ports/trust-cache';
 import type {
   EnvelopeLog,
   PublicReadRateLimiter,
@@ -12,11 +13,18 @@ import type {
 type Counter = { n: number; resetAt: number };
 
 export class MemoryRateAdapters
-  implements PublicReadRateLimiter, UnstakedWriteRateLimiter, StakedWriteRateLimiter, EnvelopeLog, StakeCache
+  implements
+    PublicReadRateLimiter,
+    UnstakedWriteRateLimiter,
+    StakedWriteRateLimiter,
+    EnvelopeLog,
+    StakeCache,
+    TrustCache
 {
   private readonly counters = new Map<string, Counter>();
   private readonly envelopes = new Set<string>();
   private readonly stake = new Map<string, StakeCacheRow>();
+  private readonly trust = new Map<string, ListingTrustRow>();
 
   private hit(key: string, limit: number, windowMs: number): RateLimitResult {
     const now = Date.now();
@@ -70,5 +78,13 @@ export class MemoryRateAdapters
       return;
     }
     this.stake.set(key, { ...row });
+  }
+
+  async getTrust(chain: ChainId, poolId: string): Promise<ListingTrustRow | undefined> {
+    return this.trust.get(`${chain}:${poolId}`);
+  }
+
+  async putTrust(row: ListingTrustRow): Promise<void> {
+    this.trust.set(`${row.chain}:${row.poolId}`, { ...row });
   }
 }

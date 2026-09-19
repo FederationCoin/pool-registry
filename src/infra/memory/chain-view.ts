@@ -70,4 +70,13 @@ export class MemoryChainView implements ChainView {
   async inspectCoinbase(_chain: ChainId, height: number) {
     return this.state.coinbases.get(height) ?? { addresses: [] };
   }
+
+  async inspectCoinbaseWindow(chain: ChainId, fromHeight: number, toHeight: number) {
+    const out: { height: number; tag?: string; addresses: string[] }[] = [];
+    for (let h = fromHeight; h <= toHeight; h++) {
+      const cb = await this.inspectCoinbase(chain, h);
+      out.push({ height: h, ...cb });
+    }
+    return out;
+  }
 }
