@@ -1,0 +1,30 @@
+name: radar-deps
+
+on:
+  push:
+    branches:
+      - federationcoin
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  radar-deps:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: npm audit JSON
+        run: npm audit --json > radar-deps-npm.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: radar-deps
+          path: radar-deps-npm.json
+          if-no-files-found: error
+          retention-days: 30
