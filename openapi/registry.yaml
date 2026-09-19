@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: FederationCoin pool registry
-  version: 0.2.2
+  version: 0.2.3
   description: >
-    Frozen /v1 (0.2.2 post-impl). Self-hostable NestJS registry
+    Frozen /v1 (0.2.3 post-impl). Self-hostable NestJS registry
     (FederationCoin/pool-registry), not federation-pool WSS. Domain
     operations require X-FederationCoin-Chain (testnet or main). Writes
     also require Authorization Bearer (base64url SigningEnvelope JSON),

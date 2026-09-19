@@ -10,7 +10,7 @@ secp.etc.hmacSha256Sync = (k, ...msgs) => {
   }
   return h.digest();
 };
-import { RegistrySignedMessageMagic } from './constants';
+import { RegistrySignedMessageMagic, SignedMessageMagics } from './constants';
 import { payloadHashHex } from './jcs';
 import { RegistryProblem, type CommandKind, type SigningEnvelope } from './types';
 import { assertP2wpkh, encodeP2wpkh } from './wallet';
@@ -43,14 +43,31 @@ function concat(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
-export function sparrowMessageBytes(inner: string): Uint8Array {
-  const magic = new TextEncoder().encode(RegistrySignedMessageMagic);
+function messageBytes(magicText: string, inner: string): Uint8Array {
+  const magic = new TextEncoder().encode(magicText);
   const msg = new TextEncoder().encode(inner);
   return concat([compactSize(magic.length), magic, compactSize(msg.length), msg]);
 }
 
+export function sparrowMessageBytes(inner: string): Uint8Array {
+  return messageBytes(RegistrySignedMessageMagic, inner);
+}
+
 export function sparrowMessageHash(inner: string): Uint8Array {
   return sha256(sha256(sparrowMessageBytes(inner)));
+}
+
+function pubHashMatches(prog: Uint8Array, pub: Uint8Array): boolean {
+  const got = ripemd160(sha256(pub));
+  if (got.length !== prog.length) {
+    return false;
+  }
+  for (let i = 0; i < prog.length; i++) {
+    if (got[i] !== prog[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function decodeCompactSig(signature: string): { recId: number; compact: Uint8Array } {
@@ -72,21 +89,20 @@ export function decodeCompactSig(signature: string): { recId: number; compact: U
 
 export function verifyEnvelopeSignature(env: SigningEnvelope): void {
   const prog = assertP2wpkh(env.wallet, env.chain);
-  const hash = sparrowMessageHash(env.payloadHash.toLowerCase());
+  const inner = env.payloadHash.toLowerCase();
   const { recId, compact } = decodeCompactSig(env.signature);
-  let pub: Uint8Array;
-  try {
-    const point = secp.Signature.fromCompact(compact).addRecoveryBit(recId).recoverPublicKey(hash);
-    pub = point.toRawBytes(true);
-  } catch {
-    throw new RegistryProblem(401, 'badSignature', 'Signature does not match wallet');
-  }
-  const got = ripemd160(sha256(pub));
-  for (let i = 0; i < 20; i++) {
-    if (got[i] !== prog[i]) {
-      throw new RegistryProblem(401, 'badSignature', 'Signature does not match wallet');
+  for (const magic of SignedMessageMagics) {
+    try {
+      const hash = sha256(sha256(messageBytes(magic, inner)));
+      const point = secp.Signature.fromCompact(compact).addRecoveryBit(recId).recoverPublicKey(hash);
+      if (pubHashMatches(prog, point.toRawBytes(true))) {
+        return;
+      }
+    } catch {
+      /* try the other magic */
     }
   }
+  throw new RegistryProblem(401, 'badSignature', 'Signature does not match wallet');
 }
 
 export function assertEnvelope(

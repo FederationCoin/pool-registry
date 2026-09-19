@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { payloadHashHex } from './jcs';
-import { assertEnvelope, decodeCompactSig } from './envelope';
+import { assertEnvelope, decodeCompactSig, verifyEnvelopeSignature } from './envelope';
 import { signEnvelope, testKey } from '../test-support';
 import { RegistryProblem } from './types';
 import { censorTagForDisplay } from './text';
@@ -21,6 +21,21 @@ describe('envelope and text', () => {
     });
     expect(env.payloadHash).toBe(payloadHashHex(command));
     expect(() => assertEnvelope(env, 'testnet', 'heartbeatListing', command)).not.toThrow();
+  });
+
+  it('accepts a Sparrow Electrum signature hashed with Bitcoin Signed Message', () => {
+    expect(() =>
+      verifyEnvelopeSignature({
+        messageVersion: 1,
+        commandKind: 'registerListing',
+        chain: 'testnet',
+        wallet: 'tgfcn1q3q3s7s9f76049j7uyp5sgrw96wnearh9md8wh6',
+        payloadHash: '16ba6415324032c9320d0ba6e65d6f0a4b4565cfda731721275ee524da9bdbd6',
+        signature: 'H20kCjSQSRurJdzD7BPUirWfyG635CXiKtOqAKcptjxtfcD3KeheYODrlJA4nLTgn1luacrWS0bJYrm3fNqTngM=',
+        signingBlockHash: '00'.repeat(32),
+        signingBlockHeight: 1,
+      }),
+    ).not.toThrow();
   });
 
   it('rejects a commandKind mismatch and a mutated hash', () => {

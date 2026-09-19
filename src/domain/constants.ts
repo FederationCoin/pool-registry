@@ -1,7 +1,12 @@
-export const PACKAGE_VERSION = '0.2.2';
+export const PACKAGE_VERSION = '0.2.3';
 
-/** Pin: same prefix Sparrow / node signmessage use. */
+/** Sparrow Standard (Electrum) and node signmessage. */
+export const BitcoinSignedMessageMagic = 'Bitcoin Signed Message:\n';
+
+/** Optional FederationCoin prefix. Verify tries Bitcoin first, then this. */
 export const RegistrySignedMessageMagic = 'FederationCoin Signed Message:\n';
+
+export const SignedMessageMagics = [BitcoinSignedMessageMagic, RegistrySignedMessageMagic] as const;
 
 export const Rtx3090TiBlake2bHashesPerSecond = 5_000_000_000;
 
