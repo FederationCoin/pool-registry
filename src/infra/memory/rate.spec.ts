@@ -29,5 +29,15 @@ describe('memory rate adapters', () => {
     });
     const got = await r.get('testnet', 'w');
     expect(got?.asOfHeight).toBe(2);
+    await r.putTrust({
+      chain: 'testnet',
+      poolId: 'p',
+      asOfHeight: 10,
+      attestationCount: 1,
+      listerConfirmedCoinbasePayee: false,
+    });
+    expect((await r.getTrust('testnet', 'p'))?.attestationCount).toBe(1);
+    await r.bustTrust('testnet', 'p');
+    expect(await r.getTrust('testnet', 'p')).toBeUndefined();
   });
 });

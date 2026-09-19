@@ -7,6 +7,7 @@ import { MemoryChainView } from '../infra/memory/chain-view';
 import { ListingsService, type RegisterBody, type UpdateBody } from './listings.service';
 import { signEnvelope, testKey } from '../test-support';
 import { HiddenAfterMs } from '../domain/constants';
+import type { ListingConnect } from '../domain/types';
 
 function svc(chain = new MemoryChainView()) {
   const listings = new MemoryListingStore();
@@ -17,13 +18,31 @@ function svc(chain = new MemoryChainView()) {
   return { api, listings, reviews, attestations, rates, chain };
 }
 
-function registerCmd(name: string, connect: RegisterBody['connect']): RegisterBody {
+const matchingConnect: ListingConnect = {
+  kind: 'stratumAndDatum',
+  stratum: { host: 'stratum.example.com', port: 23334 },
+  datum: { host: 'datum.example.com', port: 28916 },
+};
+
+function registerCmd(overrides: Partial<RegisterBody> = {}): RegisterBody {
   return {
     commandKind: 'registerListing',
-    name,
+    name: 'Example Pool',
     websiteUrl: 'https://example.com',
-    coinbaseTag: `/${name}/`,
+    coinbaseTag: '/Example Pool/',
+    connect: matchingConnect,
+    ...overrides,
+  };
+}
+
+function updateCmd(connect: ListingConnect, overrides: Partial<UpdateBody> = {}): UpdateBody {
+  return {
+    commandKind: 'updateListing',
+    name: 'Example Pool',
+    websiteUrl: 'https://example.com',
+    coinbaseTag: '/Example Pool/',
     connect,
+    ...overrides,
   };
 }
 
@@ -40,7 +59,7 @@ describe('ListingsService', () => {
     const { api, listings, chain } = svc();
     const { priv, wallet } = testKey();
     chain.state.balances.set(wallet, 10n ** 18n);
-    const cmd = registerCmd('Old', { kind: 'stratumOnly', stratum: { host: 'pool.example.com', port: 23334 } });
+    const cmd = registerCmd({ name: 'Old' });
     const env = signEnvelope({
       priv,
       wallet,
@@ -61,11 +80,11 @@ describe('ListingsService', () => {
     expect(await listings.get(poolId)).toBeUndefined();
   });
 
-  it('rejects duplicate envelopes', async () => {
+  it('rejects duplicate envelopes before a second listing', async () => {
     const { api, chain } = svc();
     const { priv, wallet } = testKey();
     chain.state.balances.set(wallet, 10n ** 18n);
-    const cmd = registerCmd('Dup', { kind: 'stratumOnly', stratum: { host: 'pool.example.com', port: 23334 } });
+    const cmd = registerCmd({ name: 'Dup' });
     const env = signEnvelope({
       priv,
       wallet,
@@ -79,32 +98,32 @@ describe('ListingsService', () => {
     await expect(api.register('testnet', env, cmd, '4.4.4.4')).rejects.toMatchObject({ code: 'duplicateEnvelope' });
   });
 
-  it('rejects a second listing from the same operator wallet', async () => {
+  it('rejects a second listing from the same wallet', async () => {
     const { api, chain } = svc();
     const { priv, wallet } = testKey();
     chain.state.balances.set(wallet, 10n ** 18n);
-    const cmd = registerCmd('One', { kind: 'stratumOnly', stratum: { host: 'pool.example.com', port: 23334 } });
+    const first = registerCmd({ name: 'One' });
     const env = signEnvelope({
       priv,
       wallet,
       chain: 'testnet',
       commandKind: 'registerListing',
-      command: cmd,
+      command: first,
       signingBlockHash: chain.state.hash,
       signingBlockHeight: chain.state.height,
     });
-    await api.register('testnet', env, cmd, '8.8.8.8');
-    const cmd2 = registerCmd('Two', { kind: 'stratumOnly', stratum: { host: 'pool.example.com', port: 23334 } });
+    await api.register('testnet', env, first, '4.4.4.5');
+    const second = registerCmd({ name: 'Two' });
     const env2 = signEnvelope({
       priv,
       wallet,
       chain: 'testnet',
       commandKind: 'registerListing',
-      command: cmd2,
+      command: second,
       signingBlockHash: chain.state.hash,
       signingBlockHeight: chain.state.height,
     });
-    await expect(api.register('testnet', env2, cmd2, '8.8.8.8')).rejects.toMatchObject({ code: 'duplicateListing' });
+    await expect(api.register('testnet', env2, second, '4.4.4.5')).rejects.toMatchObject({ code: 'duplicateListing' });
   });
 
   it('rejects a non-operator update', async () => {
@@ -113,7 +132,10 @@ describe('ListingsService', () => {
     const b = testKey();
     chain.state.balances.set(a.wallet, 10n ** 18n);
     chain.state.balances.set(b.wallet, 10n ** 18n);
-    const cmd = registerCmd('Op', { kind: 'datumOnly', datum: { host: 'datum.example.com', port: 28916 } });
+    const cmd = registerCmd({
+      name: 'Op',
+      connect: { kind: 'datumOnly', datum: { host: 'datum.example.com', port: 28916 } },
+    });
     const env = signEnvelope({
       priv: a.priv,
       wallet: a.wallet,
@@ -124,13 +146,7 @@ describe('ListingsService', () => {
       signingBlockHeight: chain.state.height,
     });
     const { poolId } = await api.register('testnet', env, cmd, '3.3.3.3');
-    const upd: UpdateBody = {
-      commandKind: 'updateListing',
-      name: 'Hijack',
-      websiteUrl: 'https://example.com',
-      coinbaseTag: '/Op/',
-      connect: { kind: 'datumOnly', datum: { host: 'datum.example.com', port: 28916 } },
-    };
+    const upd = updateCmd({ kind: 'datumOnly', datum: { host: 'datum.example.com', port: 28916 } }, { name: 'Hijack' });
     const bad = signEnvelope({
       priv: b.priv,
       wallet: b.wallet,
@@ -143,16 +159,36 @@ describe('ListingsService', () => {
     await expect(api.update('testnet', poolId, bad, upd, '3.3.3.3')).rejects.toMatchObject({ code: 'notOperator' });
   });
 
-  it('attests a proven coinbase payee and rejects a duplicate attestation', async () => {
+  it('rejects mixed registrable domains', async () => {
     const { api, chain } = svc();
-    const operator = testKey();
-    const attester = testKey();
-    chain.state.balances.set(operator.wallet, 10n ** 18n);
-    chain.state.balances.set(attester.wallet, 10n ** 18n);
-    const cmd = registerCmd('AttestMe', { kind: 'stratumOnly', stratum: { host: 'pool.example.com', port: 23334 } });
+    const { priv, wallet } = testKey();
+    chain.state.balances.set(wallet, 10n ** 18n);
+    const cmd = registerCmd({
+      websiteUrl: 'https://brand.example.com',
+      connect: { kind: 'stratumOnly', stratum: { host: 'stratum.other.com', port: 23334 } },
+    });
     const env = signEnvelope({
-      priv: operator.priv,
-      wallet: operator.wallet,
+      priv,
+      wallet,
+      chain: 'testnet',
+      commandKind: 'registerListing',
+      command: cmd,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    await expect(api.register('testnet', env, cmd, '8.8.8.8')).rejects.toMatchObject({ code: 'mixedDomain' });
+  });
+
+  it('drops then restores attestationCount when advertised host:port changes and reverts', async () => {
+    const { api, chain } = svc();
+    const lister = testKey();
+    const attester = testKey();
+    chain.state.balances.set(lister.wallet, 10n ** 18n);
+    chain.state.balances.set(attester.wallet, 10n ** 18n);
+    const cmd = registerCmd();
+    const env = signEnvelope({
+      priv: lister.priv,
+      wallet: lister.wallet,
       chain: 'testnet',
       commandKind: 'registerListing',
       command: cmd,
@@ -160,9 +196,13 @@ describe('ListingsService', () => {
       signingBlockHeight: chain.state.height,
     });
     const { poolId } = await api.register('testnet', env, cmd, '5.5.5.5');
-    chain.state.coinbases.set(chain.state.height, { tag: '/AttestMe/', addresses: [attester.wallet] });
-    chain.state.coinbases.set(chain.state.height - 1, { tag: '/AttestMe/', addresses: [attester.wallet] });
-    const attest = { commandKind: 'attestListing' as const, poolId, height: chain.state.height };
+    chain.state.coinbases.set(chain.state.height, { tag: '/Example Pool/', addresses: [attester.wallet] });
+    const attest = {
+      commandKind: 'attestListing' as const,
+      poolId,
+      height: chain.state.height,
+      connect: { kind: 'stratum' as const, host: 'Stratum.example.com', port: 23334 },
+    };
     const aEnv = signEnvelope({
       priv: attester.priv,
       wallet: attester.wallet,
@@ -172,24 +212,146 @@ describe('ListingsService', () => {
       signingBlockHash: chain.state.hash,
       signingBlockHeight: chain.state.height,
     });
-    await api.attestListing('testnet', poolId, aEnv, attest, '5.5.5.5');
-    const pub = await api.getOne('testnet', poolId, '5.5.5.5');
-    expect(pub.attestationCount).toBe(1);
-    await expect(api.attestListing('testnet', poolId, aEnv, attest, '5.5.5.5')).rejects.toMatchObject({
-      code: 'duplicateEnvelope',
+    await api.attestListing('testnet', poolId, aEnv, attest, '5.5.5.6');
+    const counted = await api.getOne('testnet', poolId, '5.5.5.7');
+    expect(counted.attestationCount).toBe(1);
+
+    const moved = updateCmd({
+      kind: 'stratumAndDatum',
+      stratum: { host: 'stratum.example.com', port: 23335 },
+      datum: { host: 'datum.example.com', port: 28916 },
     });
-    const attest2 = { commandKind: 'attestListing' as const, poolId, height: chain.state.height - 1 };
-    const aEnv2 = signEnvelope({
+    const uEnv = signEnvelope({
+      priv: lister.priv,
+      wallet: lister.wallet,
+      chain: 'testnet',
+      commandKind: 'updateListing',
+      command: moved,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    const afterMove = await api.update('testnet', poolId, uEnv, moved, '5.5.5.5');
+    expect(afterMove.attestationCount).toBe(0);
+    const findAfterMove = await api.findActive('testnet', undefined, undefined, '5.5.5.8');
+    expect(findAfterMove.items[0].attestationCount).toBe(0);
+
+    const reverted = updateCmd(matchingConnect);
+    const rEnv = signEnvelope({
+      priv: lister.priv,
+      wallet: lister.wallet,
+      chain: 'testnet',
+      commandKind: 'updateListing',
+      command: reverted,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    const afterRevert = await api.update('testnet', poolId, rEnv, reverted, '5.5.5.5');
+    expect(afterRevert.attestationCount).toBe(1);
+  });
+
+  it('rejects DATUM attest on a stratum-only listing and a second attest from the same wallet', async () => {
+    const { api, chain, attestations } = svc();
+    const lister = testKey();
+    const attester = testKey();
+    chain.state.balances.set(lister.wallet, 10n ** 18n);
+    chain.state.balances.set(attester.wallet, 10n ** 18n);
+    const cmd = registerCmd({
+      connect: { kind: 'stratumOnly', stratum: { host: 'stratum.example.com', port: 23334 } },
+    });
+    const env = signEnvelope({
+      priv: lister.priv,
+      wallet: lister.wallet,
+      chain: 'testnet',
+      commandKind: 'registerListing',
+      command: cmd,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    const { poolId } = await api.register('testnet', env, cmd, '6.6.6.6');
+    chain.state.coinbases.set(chain.state.height, { tag: '/Example Pool/', addresses: [attester.wallet] });
+    const datumAttest = {
+      commandKind: 'attestListing' as const,
+      poolId,
+      height: chain.state.height,
+      connect: { kind: 'datum' as const, host: 'datum.example.com', port: 28916 },
+    };
+    const badEnv = signEnvelope({
       priv: attester.priv,
       wallet: attester.wallet,
       chain: 'testnet',
       commandKind: 'attestListing',
-      command: attest2,
+      command: datumAttest,
       signingBlockHash: chain.state.hash,
       signingBlockHeight: chain.state.height,
     });
-    await expect(api.attestListing('testnet', poolId, aEnv2, attest2, '5.5.5.5')).rejects.toMatchObject({
+    await expect(api.attestListing('testnet', poolId, badEnv, datumAttest, '6.6.6.7')).rejects.toMatchObject({
+      code: 'connectChanged',
+    });
+
+    const ok = {
+      commandKind: 'attestListing' as const,
+      poolId,
+      height: chain.state.height,
+      connect: { kind: 'stratum' as const, host: 'stratum.example.com', port: 23334 },
+    };
+    const okEnv = signEnvelope({
+      priv: attester.priv,
+      wallet: attester.wallet,
+      chain: 'testnet',
+      commandKind: 'attestListing',
+      command: ok,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    await api.attestListing('testnet', poolId, okEnv, ok, '6.6.6.8');
+    chain.state.coinbases.set(chain.state.height - 1, { tag: '/Example Pool/', addresses: [attester.wallet] });
+    const again = {
+      commandKind: 'attestListing' as const,
+      poolId,
+      height: chain.state.height - 1,
+      connect: { kind: 'stratum' as const, host: 'stratum.example.com', port: 23334 },
+    };
+    const againEnv = signEnvelope({
+      priv: attester.priv,
+      wallet: attester.wallet,
+      chain: 'testnet',
+      commandKind: 'attestListing',
+      command: again,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    await expect(api.attestListing('testnet', poolId, againEnv, again, '6.6.6.9')).rejects.toMatchObject({
       code: 'duplicateAttestation',
     });
+    expect((await attestations.listByPool(poolId)).length).toBe(1);
+  });
+
+  it('does not count legacy rows missing connect', async () => {
+    const { api, chain, listings, attestations, rates } = svc();
+    const lister = testKey();
+    chain.state.balances.set(lister.wallet, 10n ** 18n);
+    const cmd = registerCmd();
+    const env = signEnvelope({
+      priv: lister.priv,
+      wallet: lister.wallet,
+      chain: 'testnet',
+      commandKind: 'registerListing',
+      command: cmd,
+      signingBlockHash: chain.state.hash,
+      signingBlockHeight: chain.state.height,
+    });
+    const { poolId } = await api.register('testnet', env, cmd, '7.7.7.7');
+    await attestations.put({
+      attesterWallet: lister.wallet,
+      poolId,
+      chain: 'testnet',
+      height: 1,
+      createdAt: new Date().toISOString(),
+      envelope: env,
+    } as never);
+    await rates.bustTrust('testnet', poolId);
+    expect((await listings.get(poolId))?.poolId).toBe(poolId);
+    const row = await api.getOne('testnet', poolId, '7.7.7.8');
+    expect(row.attestationCount).toBe(0);
   });
 });

@@ -94,9 +94,10 @@ describe('http registry', () => {
     await request(app.getHttpServer()).get('/v1/readyz').expect(200);
     await request(app.getHttpServer()).get('/v1/docs').expect(200);
     const spec = await request(app.getHttpServer()).get('/v1/openapi.json').expect(200);
-    expect(spec.body.info.version).toBe('0.2.0');
+    expect(spec.body.info.version).toBe('0.2.1');
     expect(spec.body.paths['/v1/listings']).toBeTruthy();
     expect(spec.body.paths['/v1/listings/{poolId}/attestations']).toBeTruthy();
+    expect(spec.body.components.schemas.AttestConnect).toBeTruthy();
   });
 
   it('rejects missing and main chain headers', async () => {
@@ -353,7 +354,12 @@ describe('http registry', () => {
       .send(cmd)
       .expect(201);
     chain.state.coinbases.set(chain.state.height, { tag: '/Http Attest/', addresses: [attester.wallet] });
-    const attest = { commandKind: 'attestListing' as const, poolId: created.body.poolId, height: chain.state.height };
+    const attest = {
+      commandKind: 'attestListing' as const,
+      poolId: created.body.poolId,
+      height: chain.state.height,
+      connect: { kind: 'stratum' as const, host: 'stratum.example.com', port: 23334 },
+    };
     const aEnv = signEnvelope({
       priv: attester.priv,
       wallet: attester.wallet,

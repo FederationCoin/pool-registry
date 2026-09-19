@@ -1,5 +1,5 @@
 import { RejectedAdvertisePort } from './constants';
-import { RegistryProblem, type HostPort, type ListingConnect, type StratumWssAdvertise } from './types';
+import { RegistryProblem, type AttestConnect, type HostPort, type ListingConnect, type StratumWssAdvertise } from './types';
 
 const CLUSTER_DNS = /\.svc\.cluster\.local$/i;
 const V4 =
@@ -171,4 +171,70 @@ export function assertListingConnect(connect: unknown): ListingConnect {
 
 export function hasDatum(connect: ListingConnect): boolean {
   return connect.kind === 'datumOnly' || connect.kind === 'stratumAndDatum';
+}
+
+export function advertisedAttestConnect(
+  connect: ListingConnect,
+  kind: AttestConnect['kind'],
+): AttestConnect | undefined {
+  if (kind === 'stratum') {
+    if (connect.kind === 'datumOnly') {
+      return undefined;
+    }
+    return { kind: 'stratum', host: connect.stratum.host, port: connect.stratum.port };
+  }
+  if (connect.kind === 'stratumOnly') {
+    return undefined;
+  }
+  return { kind: 'datum', host: connect.datum.host, port: connect.datum.port };
+}
+
+function foldHost(host: string): string {
+  return host.trim().toLowerCase();
+}
+
+export function attestConnectEquals(a: AttestConnect, b: AttestConnect): boolean {
+  return a.kind === b.kind && foldHost(a.host) === foldHost(b.host) && a.port === b.port;
+}
+
+export function attestConnectMatchesListing(recorded: AttestConnect | undefined, listing: ListingConnect): boolean {
+  if (!recorded) {
+    return false;
+  }
+  const current = advertisedAttestConnect(listing, recorded.kind);
+  return !!current && attestConnectEquals(recorded, current);
+}
+
+export function assertAttestConnect(listing: ListingConnect, connect: unknown): AttestConnect {
+  if (!connect || typeof connect !== 'object') {
+    throw new RegistryProblem(
+      400,
+      'connectChanged',
+      'That Stratum or DATUM host is not what this listing advertises now.',
+    );
+  }
+  const c = connect as AttestConnect;
+  if (c.kind !== 'stratum' && c.kind !== 'datum') {
+    throw new RegistryProblem(
+      400,
+      'connectChanged',
+      'That Stratum or DATUM host is not what this listing advertises now.',
+    );
+  }
+  if (typeof c.host !== 'string' || !Number.isInteger(c.port)) {
+    throw new RegistryProblem(
+      400,
+      'connectChanged',
+      'That Stratum or DATUM host is not what this listing advertises now.',
+    );
+  }
+  const current = advertisedAttestConnect(listing, c.kind);
+  if (!current || !attestConnectEquals({ kind: c.kind, host: c.host, port: c.port }, current)) {
+    throw new RegistryProblem(
+      400,
+      'connectChanged',
+      'That Stratum or DATUM host is not what this listing advertises now.',
+    );
+  }
+  return { kind: c.kind, host: current.host, port: current.port };
 }

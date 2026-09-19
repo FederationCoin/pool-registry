@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
-import type { Request, Response } from 'express';
-import { ListingsService, type RegisterBody, type UpdateBody } from '../listings/listings.service';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
+import { ListingsService, type AttestBody, type RegisterBody, type UpdateBody } from '../listings/listings.service';
 import { ChainHeaderGuard } from './chain.guard';
 import { SigningEnvelopeGuard } from './envelope.guard';
 import { Chain, ClientIp, Envelope } from './params';
@@ -135,7 +135,7 @@ export class ListingsController {
     @Chain() chain: ChainId,
     @Param('poolId') poolId: string,
     @Envelope() env: SigningEnvelope,
-    @Body() body: { commandKind: 'attestListing'; poolId: string; height: number },
+    @Body() body: AttestBody,
     @ClientIp() ip: string,
     @Res({ passthrough: true }) res: Response,
   ) {

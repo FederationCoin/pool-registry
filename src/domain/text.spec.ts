@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertListingNameAllowed, assertReviewTextAllowed } from './text';
+import { assertCoinbaseTag, assertListingNameAllowed, assertReviewTextAllowed } from './text';
 import { RegistryProblem } from './types';
 import { jcs } from './jcs';
 
@@ -9,6 +9,8 @@ describe('text and jcs', () => {
     expect(() => assertListingNameAllowed('x'.repeat(65))).toThrow(RegistryProblem);
     expect(() => assertReviewTextAllowed('you retard')).toThrow(RegistryProblem);
     expect(() => assertListingNameAllowed('Fine Pool')).not.toThrow();
+    expect(() => assertCoinbaseTag(undefined)).toThrow(RegistryProblem);
+    expect(assertCoinbaseTag('/Example Pool/')).toBe('/Example Pool/');
   });
 
   it('canonicalizes objects', () => {

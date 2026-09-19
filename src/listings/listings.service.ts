@@ -20,7 +20,7 @@ import {
   type ChainId,
 } from '../domain/constants';
 import { assertEnvelope } from '../domain/envelope';
-import { assertBrandAndConnect, assertListingConnect, assertWebsiteUrl } from '../domain/host';
+import { assertAttestConnect, assertBrandAndConnect, assertListingConnect, assertWebsiteUrl, attestConnectMatchesListing } from '../domain/host';
 import { assertP2wpkh } from '../domain/wallet';
 import { compareFind, decodeCursor, encodeCursor, groupFind } from '../domain/rank';
 import { assertTipWindow, evaluateStake, isLiveAt, stakeRequiredSats, tipWindow } from '../domain/stake';
@@ -28,6 +28,7 @@ import { assertCoinbaseTag, assertListingNameAllowed, censorTagForDisplay, coinb
 import { jcs, sha256Hex } from '../domain/jcs';
 import {
   RegistryProblem,
+  type AttestConnect,
   type CommandKind,
   type FindGroup,
   type ListingConnect,
@@ -76,6 +77,7 @@ export type AttestBody = {
   commandKind: 'attestListing';
   poolId: string;
   height: number;
+  connect: AttestConnect;
 };
 
 @Injectable()
@@ -113,7 +115,9 @@ export class ListingsService {
     const listerConfirmedCoinbasePayee = window.some(
       (cb) => coinbaseHasDeclaredTag(cb.tag, row.coinbaseTag) && cb.addresses.includes(row.operatorWallet),
     );
-    const attestationCount = (await this.attestations.listByPool(row.poolId)).length;
+    const attestationCount = (await this.attestations.listByPool(row.poolId)).filter((a) =>
+      attestConnectMatchesListing(a.connect, row.connect),
+    ).length;
     const next: ListingTrustRow = {
       chain: row.chain,
       poolId: row.poolId,
@@ -296,6 +300,7 @@ export class ListingsService {
       listingDomain: fields.listingDomain,
     };
     await this.listings.put(next);
+    await this.trust.bustTrust(chain, poolId);
     await this.refreshTrust(next);
     return this.toPublic(next);
   }
@@ -396,6 +401,7 @@ export class ListingsService {
     if (!listing || listing.chain !== chain) {
       throw new RegistryProblem(404, 'notFound', 'Listing was not found');
     }
+    const connect = assertAttestConnect(listing.connect, body.connect);
     const tip = await this.chain.getTip(chain);
     const from = Math.max(0, tip.height - DifficultyPeriodBlocks + 1);
     if (body.height < from || body.height > tip.height) {
@@ -420,6 +426,7 @@ export class ListingsService {
       height: body.height,
       createdAt: new Date().toISOString(),
       envelope: env,
+      connect,
     });
     await this.refreshTrust(listing);
   }

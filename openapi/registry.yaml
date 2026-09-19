@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: FederationCoin pool registry
-  version: 0.2.0
+  version: 0.2.1
   description: >
-    Frozen /v1 (0.2.0 post-impl). Self-hostable NestJS registry
+    Frozen /v1 (0.2.1 post-impl). Self-hostable NestJS registry
     (FederationCoin/pool-registry), not federation-pool WSS. Domain
     operations require X-FederationCoin-Chain (testnet or main). Writes
     also require Authorization Bearer (base64url SigningEnvelope JSON),
@@ -12,7 +12,8 @@ info:
     not launched. additionalProperties false. Opaque FindCursor. ListingConnect
     is oneOf three kinds. websiteUrl and coinbaseTag are required writes.
     Brand, Stratum, and DATUM share one registrable domain. Find groups by
-    that domain and ranks attestations.
+    that domain and ranks attestations whose recorded AttestConnect still
+    matches the advertised host:port.
 servers:
   - url: https://pools.federationcoin.org
     description: Origin hosted instance on the shared ALB (when epic 2 executes)
@@ -414,7 +415,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     Conflict:
-      description: Duplicate envelope hash or duplicate review
+      description: Duplicate envelope hash, listing, review, or attestation
       content:
         application/problem+json:
           schema:
@@ -464,6 +465,7 @@ components:
         - badHost
         - rejectedPort
         - badConnect
+        - connectChanged
         - unknownField
         - duplicateEnvelope
         - duplicateReview
@@ -704,10 +706,49 @@ components:
         text:
           type: string
           maxLength: 2000
+    AttestConnectStratum:
+      type: object
+      additionalProperties: false
+      required: [kind, host, port]
+      properties:
+        kind:
+          type: string
+          enum: [stratum]
+        host:
+          type: string
+          maxLength: 253
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    AttestConnectDatum:
+      type: object
+      additionalProperties: false
+      required: [kind, host, port]
+      properties:
+        kind:
+          type: string
+          enum: [datum]
+        host:
+          type: string
+          maxLength: 253
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+    AttestConnect:
+      oneOf:
+        - $ref: "#/components/schemas/AttestConnectStratum"
+        - $ref: "#/components/schemas/AttestConnectDatum"
+      discriminator:
+        propertyName: kind
+        mapping:
+          stratum: "#/components/schemas/AttestConnectStratum"
+          datum: "#/components/schemas/AttestConnectDatum"
     AttestListing:
       type: object
       additionalProperties: false
-      required: [commandKind, poolId, height]
+      required: [commandKind, poolId, height, connect]
       properties:
         commandKind:
           type: string
@@ -719,6 +760,12 @@ components:
           type: integer
           minimum: 0
           description: Coinbase height in the last difficulty window with listing tag and attester payee
+        connect:
+          $ref: "#/components/schemas/AttestConnect"
+          description: >
+            One advertised endpoint copied from the listing. stratumOnly
+            listings accept kind stratum; datumOnly accept datum;
+            stratumAndDatum either, never both in one write.
     RegisterResult:
       type: object
       additionalProperties: false

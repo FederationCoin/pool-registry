@@ -92,4 +92,8 @@ export class RedisRateAdapters
       DifficultyPeriodBlocks * TargetSpacingSeconds,
     );
   }
+
+  async bustTrust(chain: ChainId, poolId: string): Promise<void> {
+    await this.redis.del(`tr:${chain}:${poolId}`);
+  }
 }

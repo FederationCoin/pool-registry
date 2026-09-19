@@ -87,4 +87,8 @@ export class MemoryRateAdapters
   async putTrust(row: ListingTrustRow): Promise<void> {
     this.trust.set(`${row.chain}:${row.poolId}`, { ...row });
   }
+
+  async bustTrust(chain: ChainId, poolId: string): Promise<void> {
+    this.trust.delete(`${chain}:${poolId}`);
+  }
 }

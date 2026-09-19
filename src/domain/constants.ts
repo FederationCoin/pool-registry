@@ -1,4 +1,4 @@
-export const PACKAGE_VERSION = '0.2.0';
+export const PACKAGE_VERSION = '0.2.1';
 
 /** Pin: same prefix Sparrow / node signmessage use. */
 export const RegistrySignedMessageMagic = 'FederationCoin Signed Message:\n';

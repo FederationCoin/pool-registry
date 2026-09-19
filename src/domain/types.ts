@@ -30,6 +30,10 @@ export type StratumAndDatumAdvertise = {
 };
 export type ListingConnect = StratumOnlyAdvertise | DatumOnlyAdvertise | StratumAndDatumAdvertise;
 
+export type AttestConnect =
+  | { kind: 'stratum'; host: string; port: number }
+  | { kind: 'datum'; host: string; port: number };
+
 export type SigningEnvelope = {
   messageVersion: number;
   commandKind: CommandKind;
@@ -93,6 +97,7 @@ export type AttestationRecord = {
   createdAt: string;
   height: number;
   envelope: SigningEnvelope;
+  connect?: AttestConnect;
 };
 
 export type ListingRecord = {
@@ -181,6 +186,7 @@ export type RegistryErrorCode =
   | 'badHost'
   | 'rejectedPort'
   | 'badConnect'
+  | 'connectChanged'
   | 'unknownField'
   | 'duplicateEnvelope'
   | 'duplicateReview'

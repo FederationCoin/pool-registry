@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertAttestConnect,
   assertBrandAndConnect,
   assertListingConnect,
   assertPublicAdvertiseHost,
@@ -75,6 +76,26 @@ describe('host', () => {
         kind: 'stratumOnly',
         stratum: { host: 'stratum.other.com', port: 23334 },
       }),
+    ).toThrow(RegistryProblem);
+  });
+
+  it('accepts AttestConnect only for a currently advertised host:port', () => {
+    const listing = {
+      kind: 'stratumAndDatum' as const,
+      stratum: { host: 'stratum.example.com', port: 23334 },
+      datum: { host: 'datum.example.com', port: 28916 },
+    };
+    expect(assertAttestConnect(listing, { kind: 'stratum', host: 'Stratum.example.com', port: 23334 }).kind).toBe(
+      'stratum',
+    );
+    expect(() => assertAttestConnect(listing, { kind: 'stratum', host: 'stratum.example.com', port: 1 })).toThrow(
+      RegistryProblem,
+    );
+    expect(() =>
+      assertAttestConnect(
+        { kind: 'stratumOnly', stratum: { host: 'stratum.example.com', port: 23334 } },
+        { kind: 'datum', host: 'datum.example.com', port: 28916 },
+      ),
     ).toThrow(RegistryProblem);
   });
 });
