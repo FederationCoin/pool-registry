@@ -100,6 +100,12 @@ export class ListingsController {
     return this.listings.stakePreview(chain, wallet ?? '', ip);
   }
 
+  @Get('sign-context')
+  @UseGuards(ChainHeaderGuard)
+  signContext(@Chain() chain: ChainId, @ClientIp() ip: string) {
+    return this.listings.signContext(chain, ip);
+  }
+
   @Post('listings/:poolId/reviews')
   @UseGuards(ChainHeaderGuard, SigningEnvelopeGuard)
   async review(
@@ -115,18 +121,9 @@ export class ListingsController {
   }
 
   @Post('listings/:poolId/reviews/:reviewerWallet/rebuttal')
-  @UseGuards(ChainHeaderGuard, SigningEnvelopeGuard)
-  async rebuttal(
-    @Chain() chain: ChainId,
-    @Param('poolId') poolId: string,
-    @Param('reviewerWallet') reviewerWallet: string,
-    @Envelope() env: SigningEnvelope,
-    @Body() body: { commandKind: 'postRebuttal'; text: string },
-    @ClientIp() ip: string,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    await this.listings.postRebuttal(chain, poolId, reviewerWallet, env, body, ip);
-    res.status(201);
+  @UseGuards(ChainHeaderGuard)
+  async rebuttal(@Chain() chain: ChainId) {
+    await this.listings.postRebuttal(chain);
   }
 
   @Post('listings/:poolId/attestations')

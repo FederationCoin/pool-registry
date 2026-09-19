@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { payloadHashHex } from './jcs';
-import { assertEnvelope } from './envelope';
+import { assertEnvelope, decodeCompactSig } from './envelope';
 import { signEnvelope, testKey } from '../test-support';
 import { RegistryProblem } from './types';
 import { censorTagForDisplay } from './text';
@@ -60,6 +60,15 @@ describe('envelope and text', () => {
     env.messageVersion = 1;
     env.signature = 'AAAA';
     expect(() => assertEnvelope(env, 'testnet', 'heartbeatListing', command)).toThrow(RegistryProblem);
+  });
+
+  it('rejects BIP137 headers 39-42 as not compact Electrum', () => {
+    const compact = Buffer.alloc(65, 1);
+    compact[0] = 39;
+    const b64 = compact.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    expect(() => decodeCompactSig(b64)).toThrow(RegistryProblem);
+    compact[0] = 27;
+    expect(() => decodeCompactSig(compact.toString('base64url'))).not.toThrow();
   });
 
   it('censors flagged words on read only', () => {

@@ -23,7 +23,7 @@ import { assertEnvelope } from '../domain/envelope';
 import { assertAttestConnect, assertBrandAndConnect, assertListingConnect, assertWebsiteUrl, attestConnectMatchesListing } from '../domain/host';
 import { assertP2wpkh } from '../domain/wallet';
 import { compareFind, decodeCursor, encodeCursor, groupFind } from '../domain/rank';
-import { assertTipWindow, evaluateStake, isLiveAt, stakeRequiredSats, tipWindow } from '../domain/stake';
+import { assertTipWindow, evaluateStake, isLiveAt, stakeMineSeconds, stakeRequiredSats, tipWindow } from '../domain/stake';
 import { assertCoinbaseTag, assertListingNameAllowed, censorTagForDisplay, coinbaseHasDeclaredTag, normalizeName } from '../domain/text';
 import { jcs, sha256Hex } from '../domain/jcs';
 import {
@@ -229,6 +229,20 @@ export class ListingsService {
     return preview;
   }
 
+  async signContext(chain: ChainId, ip: string) {
+    this.assertLiveTenant(chain);
+    await this.ratePublic(ip);
+    const tip = await this.chain.getTip(chain);
+    const mineSeconds = stakeMineSeconds(chain);
+    const required = stakeRequiredSats(tip.nBits, tip.subsidySats, mineSeconds);
+    return {
+      signingBlockHeight: tip.height,
+      signingBlockHash: tip.hash,
+      stakeRequiredSats: required.toString(),
+      mineSeconds,
+    };
+  }
+
   private prepareListingFields(body: RegisterBody | UpdateBody) {
     assertListingNameAllowed(body.name);
     const websiteUrl = assertWebsiteUrl(body.websiteUrl);
@@ -361,29 +375,9 @@ export class ListingsService {
     });
   }
 
-  async postRebuttal(
-    chain: ChainId,
-    poolId: string,
-    reviewerWallet: string,
-    env: SigningEnvelope,
-    body: { commandKind: 'postRebuttal'; text: string },
-    ip: string,
-  ) {
+  async postRebuttal(chain: ChainId): Promise<never> {
     this.assertLiveTenant(chain);
-    assertEnvelope(env, chain, 'postRebuttal', body);
-    await this.gateWrite(chain, env, ip);
-    await this.requireOperator(chain, poolId, env.wallet);
-    const { assertReviewTextAllowed } = await import('../domain/text');
-    assertReviewTextAllowed(body.text);
-    const review = await this.reviews.get(reviewerWallet, poolId);
-    if (!review) {
-      throw new RegistryProblem(404, 'notFound', 'Review was not found');
-    }
-    if (review.rebuttal) {
-      throw new RegistryProblem(409, 'duplicateReview', 'A rebuttal already exists');
-    }
-    review.rebuttal = { text: body.text, envelope: env };
-    await this.reviews.put(review);
+    throw new RegistryProblem(403, 'rebuttalDisabled', 'Rebuttals are disabled');
   }
 
   async attestListing(chain: ChainId, poolId: string, env: SigningEnvelope, body: AttestBody, ip: string) {
@@ -492,7 +486,7 @@ export class ListingsService {
     if (!header || header.height !== height) {
       throw new RegistryProblem(400, 'tipWindow', 'Signing block was not found');
     }
-    const required = stakeRequiredSats(header.nBits, tip.subsidySats);
+    const required = stakeRequiredSats(header.nBits, tip.subsidySats, stakeMineSeconds(chain));
     const cached = await this.stakeCache.get(chain, wallet);
     let balance = cached?.balanceSats ? BigInt(cached.balanceSats) : await this.chain.getBalance(chain, wallet);
     let holdOk = cached?.holdOk ?? true;

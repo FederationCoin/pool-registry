@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: FederationCoin pool registry
-  version: 0.2.1
+  version: 0.2.2
   description: >
-    Frozen /v1 (0.2.1 post-impl). Self-hostable NestJS registry
+    Frozen /v1 (0.2.2 post-impl). Self-hostable NestJS registry
     (FederationCoin/pool-registry), not federation-pool WSS. Domain
     operations require X-FederationCoin-Chain (testnet or main). Writes
     also require Authorization Bearer (base64url SigningEnvelope JSON),
@@ -13,7 +13,9 @@ info:
     is oneOf three kinds. websiteUrl and coinbaseTag are required writes.
     Brand, Stratum, and DATUM share one registrable domain. Find groups by
     that domain and ranks attestations whose recorded AttestConnect still
-    matches the advertised host:port.
+    matches the advertised host:port. GET /v1/sign-context fills signing
+    height, hash, and tenant stake seconds (testnet 3600, main 86400).
+    Rebuttals return 403 rebuttalDisabled.
 servers:
   - url: https://pools.federationcoin.org
     description: Origin hosted instance on the shared ALB (when epic 2 executes)
@@ -270,6 +272,24 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  /v1/sign-context:
+    get:
+      tags: [stake]
+      summary: Tip height, hash, and tenant listing stake
+      operationId: getSignContext
+      parameters:
+        - $ref: "#/components/parameters/chainHeader"
+      responses:
+        "200":
+          description: Signing context for Finder compose
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SignContext"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /v1/listings/{poolId}/attestations:
     parameters:
       - $ref: "#/components/parameters/chainHeader"
@@ -336,27 +356,13 @@ paths:
           maxLength: 90
     post:
       tags: [reviews]
-      summary: One operator rebuttal
+      summary: Rebuttals are disabled
       operationId: postRebuttal
-      security:
-        - signingEnvelope: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/PostRebuttal"
       responses:
-        "201":
-          description: Created
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
 components:
   securitySchemes:
     signingEnvelope:
@@ -404,6 +410,12 @@ components:
             $ref: "#/components/schemas/Problem"
     Unauthorized:
       description: Missing Bearer, bad wallet, or signature
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Route is disabled
       content:
         application/problem+json:
           schema:
@@ -476,6 +488,7 @@ components:
         - notFound
         - rateLimited
         - notReady
+        - rebuttalDisabled
     SigningEnvelope:
       type: object
       additionalProperties: false
@@ -961,3 +974,21 @@ components:
           stakeReady: "#/components/schemas/StakeReady"
           stakeWaiting: "#/components/schemas/StakeWaiting"
           stakeInsufficient: "#/components/schemas/StakeInsufficient"
+    SignContext:
+      type: object
+      additionalProperties: false
+      required: [signingBlockHeight, signingBlockHash, stakeRequiredSats, mineSeconds]
+      properties:
+        signingBlockHeight:
+          type: integer
+          minimum: 0
+        signingBlockHash:
+          type: string
+          minLength: 64
+          maxLength: 64
+        stakeRequiredSats:
+          type: string
+          description: Decimal satoshis for the tenant mine window
+        mineSeconds:
+          type: integer
+          description: testnet 3600, main 86400

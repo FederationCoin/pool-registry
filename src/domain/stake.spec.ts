@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { compactToTarget, evaluateStake, stakeRequiredSats, tipWindow } from './stake';
+import { compactToTarget, evaluateStake, stakeMineSeconds, stakeRequiredSats, tipWindow } from './stake';
 import { LaunchTipWindow, SteadyTipWindow } from './constants';
 
 describe('stake', () => {
   it('computes a positive stake from compact nBits', () => {
-    const sats = stakeRequiredSats(0x1d00ffff, 50n * 100_000_000n);
+    const sats = stakeRequiredSats(0x1d00ffff, 50n * 100_000_000n, 3600);
     expect(sats > 0n).toBe(true);
+  });
+
+  it('makes a day of work 24 times one hour at the same nBits', () => {
+    const nBits = 0x1d00ffff;
+    const subsidy = 50n * 100_000_000n;
+    const hour = stakeRequiredSats(nBits, subsidy, stakeMineSeconds('testnet'));
+    const day = stakeRequiredSats(nBits, subsidy, stakeMineSeconds('main'));
+    expect(stakeMineSeconds('testnet')).toBe(3600);
+    expect(stakeMineSeconds('main')).toBe(86400);
+    expect(day / hour).toBe(24n);
   });
 
   it('uses launch window before a retarget', () => {

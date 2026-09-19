@@ -94,10 +94,11 @@ describe('http registry', () => {
     await request(app.getHttpServer()).get('/v1/readyz').expect(200);
     await request(app.getHttpServer()).get('/v1/docs').expect(200);
     const spec = await request(app.getHttpServer()).get('/v1/openapi.json').expect(200);
-    expect(spec.body.info.version).toBe('0.2.1');
+    expect(spec.body.info.version).toBe('0.2.2');
     expect(spec.body.paths['/v1/listings']).toBeTruthy();
     expect(spec.body.paths['/v1/listings/{poolId}/attestations']).toBeTruthy();
     expect(spec.body.components.schemas.AttestConnect).toBeTruthy();
+    expect(spec.body.paths['/v1/sign-context']).toBeTruthy();
   });
 
   it('rejects missing and main chain headers', async () => {
@@ -149,6 +150,15 @@ describe('http registry', () => {
       .expect(200);
     expect(preview.body.kind).toBe('stakeReady');
 
+    const ctx = await request(app.getHttpServer())
+      .get('/v1/sign-context')
+      .set('X-FederationCoin-Chain', 'testnet')
+      .expect(200);
+    expect(ctx.body.signingBlockHeight).toBe(chain.state.height);
+    expect(ctx.body.signingBlockHash).toBe(chain.state.hash);
+    expect(ctx.body.mineSeconds).toBe(3600);
+    expect(typeof ctx.body.stakeRequiredSats).toBe('string');
+
     const hb = { commandKind: 'heartbeatListing' as const, poolId: created.body.poolId };
     const hbEnv = signEnvelope({
       priv,
@@ -183,22 +193,17 @@ describe('http registry', () => {
       .send(review)
       .expect(201);
 
-    const rebut = { commandKind: 'postRebuttal' as const, text: 'thanks' };
-    const bEnv = signEnvelope({
-      priv,
-      wallet,
-      chain: 'testnet',
-      commandKind: 'postRebuttal',
-      command: rebut,
-      signingBlockHash: chain.state.hash,
-      signingBlockHeight: chain.state.height,
-    });
-    await request(app.getHttpServer())
+    const storedReview = await reviews.get(wallet, created.body.poolId);
+    expect(storedReview).toBeTruthy();
+    storedReview!.rebuttal = { text: 'thanks', envelope: rEnv };
+    await reviews.put(storedReview!);
+
+    const disabled = await request(app.getHttpServer())
       .post(`/v1/listings/${created.body.poolId}/reviews/${wallet}/rebuttal`)
       .set('X-FederationCoin-Chain', 'testnet')
-      .set('Authorization', bearer(bEnv))
-      .send(rebut)
-      .expect(201);
+      .send({ commandKind: 'postRebuttal', text: 'thanks' })
+      .expect(403);
+    expect(disabled.body.code).toBe('rebuttalDisabled');
 
     await admin.setHostileFlag(wallet, created.body.poolId, 'attacked the reviewer');
     const flagged = await request(app.getHttpServer())

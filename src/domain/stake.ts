@@ -7,6 +7,7 @@ import {
   SpacingSlack,
   SteadyTipWindow,
   TargetSpacingSeconds,
+  type ChainId,
 } from './constants';
 import { RegistryProblem, type StakeCheck, type StakePreviewResult } from './types';
 
@@ -19,14 +20,18 @@ export function compactToTarget(nBits: number): bigint {
   return BigInt(mant) << BigInt(8 * (exp - 3));
 }
 
-export function stakeRequiredSats(nBits: number, subsidySats: bigint): bigint {
+export function stakeMineSeconds(chain: ChainId): number {
+  return chain === 'main' ? 86400 : 3600;
+}
+
+export function stakeRequiredSats(nBits: number, subsidySats: bigint, mineSeconds: number): bigint {
   const target = compactToTarget(nBits);
   const expected = (1n << 256n) / (target + 1n);
-  const hashes24h = BigInt(Rtx3090TiBlake2bHashesPerSecond) * 86400n;
+  const hashes = BigInt(Rtx3090TiBlake2bHashesPerSecond) * BigInt(mineSeconds);
   if (expected === 0n) {
     return subsidySats;
   }
-  return (hashes24h * subsidySats) / expected;
+  return (hashes * subsidySats) / expected;
 }
 
 export function tipWindow(args: {

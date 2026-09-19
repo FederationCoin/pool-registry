@@ -196,7 +196,8 @@ export type RegistryErrorCode =
   | 'rateLimited'
   | 'notReady'
   | 'mixedDomain'
-  | 'attestationUnproven';
+  | 'attestationUnproven'
+  | 'rebuttalDisabled';
 
 export type ProblemBody = {
   type: string;
