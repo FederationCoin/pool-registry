@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: FederationCoin pool registry
-  version: 0.2.4
+  version: 0.2.5
   description: >
-    Frozen /v1 (0.2.4 post-impl). Self-hostable NestJS registry
+    Frozen /v1 (0.2.5 post-impl). Self-hostable NestJS registry
     (FederationCoin/pool-registry), not federation-pool WSS. Domain
     operations require X-FederationCoin-Chain (testnet or main). Writes
     also require Authorization Bearer (base64url SigningEnvelope JSON),
@@ -517,7 +517,7 @@ components:
           type: string
           minLength: 64
           maxLength: 64
-          description: SHA-256 hex of RFC 8785 JCS command bytes
+          description: SHA-256 hex of RFC 8785 JCS of command, signingBlockHeight, and signingBlockHash
         signature:
           type: string
           maxLength: 144

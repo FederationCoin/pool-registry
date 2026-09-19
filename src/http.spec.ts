@@ -94,7 +94,7 @@ describe('http registry', () => {
     await request(app.getHttpServer()).get('/v1/readyz').expect(200);
     await request(app.getHttpServer()).get('/v1/docs').expect(200);
     const spec = await request(app.getHttpServer()).get('/v1/openapi.json').expect(200);
-    expect(spec.body.info.version).toBe('0.2.4');
+    expect(spec.body.info.version).toBe('0.2.5');
     expect(spec.body.paths['/v1/listings']).toBeTruthy();
     expect(spec.body.paths['/v1/listings/{poolId}/attestations']).toBeTruthy();
     expect(spec.body.components.schemas.AttestConnect).toBeTruthy();

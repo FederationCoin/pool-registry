@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { payloadHashHex } from './jcs';
+import { signedPayloadHash } from './jcs';
 import { assertEnvelope, decodeCompactSig, verifyEnvelopeSignature } from './envelope';
 import { signEnvelope, testKey } from '../test-support';
 import { RegistryProblem } from './types';
@@ -19,8 +19,37 @@ describe('envelope and text', () => {
       signingBlockHash: 'ab'.repeat(32),
       signingBlockHeight: 1,
     });
-    expect(env.payloadHash).toBe(payloadHashHex(command));
+    expect(env.payloadHash).toBe(signedPayloadHash(command, 1, 'ab'.repeat(32)));
     expect(() => assertEnvelope(env, 'testnet', 'heartbeatListing', command)).not.toThrow();
+  });
+
+  it('binds signing height and hash into the payload hash', () => {
+    const command = { commandKind: 'heartbeatListing', poolId: '01HZX' };
+    const hash = 'ab'.repeat(32);
+    expect(signedPayloadHash(command, 1, hash)).not.toBe(signedPayloadHash(command, 2, hash));
+    expect(signedPayloadHash(command, 1, hash)).not.toBe(signedPayloadHash(command, 1, 'cd'.repeat(32)));
+  });
+
+  it('rejects an envelope whose tip no longer matches the signed hash', () => {
+    const { priv, wallet } = testKey();
+    const command = { commandKind: 'heartbeatListing', poolId: '01HZX' };
+    const env = signEnvelope({
+      priv,
+      wallet,
+      chain: 'testnet',
+      commandKind: 'heartbeatListing',
+      command,
+      signingBlockHash: 'ab'.repeat(32),
+      signingBlockHeight: 1,
+    });
+    env.signingBlockHeight = 2;
+    try {
+      assertEnvelope(env, 'testnet', 'heartbeatListing', command);
+      expect.fail('expected payloadHashMismatch');
+    } catch (e) {
+      expect(e).toBeInstanceOf(RegistryProblem);
+      expect((e as RegistryProblem).code).toBe('payloadHashMismatch');
+    }
   });
 
   it('accepts a Sparrow Electrum signature hashed with Bitcoin Signed Message', () => {

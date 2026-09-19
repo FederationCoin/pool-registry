@@ -11,7 +11,7 @@ secp.etc.hmacSha256Sync = (k, ...msgs) => {
   return h.digest();
 };
 import { RegistrySignedMessageMagic, SignedMessageMagics } from './constants';
-import { payloadHashHex } from './jcs';
+import { signedPayloadHash } from './jcs';
 import { RegistryProblem, type CommandKind, type SigningEnvelope } from './types';
 import { assertP2wpkh, encodeP2wpkh } from './wallet';
 import type { ChainId } from './constants';
@@ -120,7 +120,7 @@ export function assertEnvelope(
   if (env.commandKind !== commandKind) {
     throw new RegistryProblem(400, 'commandKindMismatch', 'commandKind does not match this route');
   }
-  const expected = payloadHashHex(command);
+  const expected = signedPayloadHash(command, env.signingBlockHeight, env.signingBlockHash);
   if (env.payloadHash.toLowerCase() !== expected) {
     throw new RegistryProblem(400, 'payloadHashMismatch', 'payloadHash does not match command');
   }
