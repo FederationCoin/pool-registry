@@ -55,6 +55,15 @@ describe('ListingsService', () => {
     expect(preview.kind).toBe('stakeInsufficient');
   });
 
+  it('re-reads chain balance after a cached zero at the same height', async () => {
+    const { api, chain } = svc();
+    const { wallet } = testKey();
+    chain.state.balances.set(wallet, 0n);
+    expect((await api.stakePreview('testnet', wallet, '1.1.1.1')).kind).toBe('stakeInsufficient');
+    chain.state.balances.set(wallet, 10n ** 18n);
+    expect((await api.stakePreview('testnet', wallet, '1.1.1.1')).kind).toBe('stakeReady');
+  });
+
   it('hides then reaps stale rows', async () => {
     const { api, listings, chain } = svc();
     const { priv, wallet } = testKey();

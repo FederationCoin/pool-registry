@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import type { ChainId } from '../../domain/constants';
 import { DifficultyPeriodBlocks } from '../../domain/constants';
+import { jsonRpcCoinsToSats } from '../../domain/stake';
 import type { BlockHeader, ChainView, WalletTx } from '../../ports/chain-view';
 import type { RpcChainSettings } from '../../ports/secret-store';
 
@@ -99,21 +100,44 @@ export class RpcChainView implements ChainView {
     if (!s.explorerBaseUrl) {
       return undefined;
     }
-    const res = await fetch(`${s.explorerBaseUrl.replace(/\/$/, '')}${path}`);
-    if (!res.ok) {
+    try {
+      const res = await fetch(`${s.explorerBaseUrl.replace(/\/$/, '')}${path}`);
+      if (!res.ok) {
+        return undefined;
+      }
+      return await res.json();
+    } catch {
       return undefined;
     }
-    return res.json();
+  }
+
+  private async scanAddressSats(chain: ChainId, wallet: string): Promise<bigint> {
+    if (!/^[a-z0-9]{14,90}$/.test(wallet)) {
+      return 0n;
+    }
+    try {
+      const scanned = (await this.rpc(chain, 'scantxoutset', ['start', [`addr(${wallet})`]])) as {
+        success?: boolean;
+        total_amount?: unknown;
+      };
+      if (scanned?.success !== true) {
+        return 0n;
+      }
+      return jsonRpcCoinsToSats(scanned.total_amount);
+    } catch {
+      this.log.warn('scantxoutset failed; treating wallet balance as 0');
+      return 0n;
+    }
   }
 
   async getBalance(chain: ChainId, wallet: string): Promise<bigint> {
     const data = (await this.explorer(chain, `/api/address/${wallet}`)) as
       | { chain_stats?: { funded_txo_sum?: number; spent_txo_sum?: number } }
       | undefined;
-    if (!data?.chain_stats) {
-      return 0n;
+    if (data?.chain_stats) {
+      return BigInt(data.chain_stats.funded_txo_sum ?? 0) - BigInt(data.chain_stats.spent_txo_sum ?? 0);
     }
-    return BigInt(data.chain_stats.funded_txo_sum ?? 0) - BigInt(data.chain_stats.spent_txo_sum ?? 0);
+    return this.scanAddressSats(chain, wallet);
   }
 
   async iterWalletTx(chain: ChainId, wallet: string, fromHeight: number, toHeight: number): Promise<WalletTx[]> {

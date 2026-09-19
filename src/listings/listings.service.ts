@@ -488,15 +488,22 @@ export class ListingsService {
     }
     const required = stakeRequiredSats(header.nBits, tip.subsidySats, stakeMineSeconds(chain));
     const cached = await this.stakeCache.get(chain, wallet);
-    let balance = cached?.balanceSats ? BigInt(cached.balanceSats) : await this.chain.getBalance(chain, wallet);
-    let holdOk = cached?.holdOk ?? true;
-    const from = cached ? cached.asOfHeight + 1 : Math.max(0, height - DifficultyPeriodBlocks);
-    if (!cached || tip.height > cached.asOfHeight) {
+    const cachedBalance = cached ? BigInt(cached.balanceSats) : 0n;
+    const cacheFresh = Boolean(cached) && tip.height <= cached!.asOfHeight && cachedBalance > 0n;
+    let balance: bigint;
+    let holdOk: boolean;
+    if (cacheFresh) {
+      balance = cachedBalance;
+      holdOk = cached!.holdOk ?? true;
+    } else {
+      const from =
+        cached && cachedBalance > 0n ? cached.asOfHeight + 1 : Math.max(0, height - DifficultyPeriodBlocks);
       const txs = await this.chain.iterWalletTx(chain, wallet, from, height);
       if (txs.length) {
         balance = txs[txs.length - 1].balanceAfterSats;
         holdOk = txs.every((t) => t.balanceAfterSats >= required);
-      } else if (!cached) {
+      } else {
+        balance = await this.chain.getBalance(chain, wallet);
         holdOk = balance >= required;
       }
       await this.stakeCache.put({

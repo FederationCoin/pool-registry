@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { compactToTarget, evaluateStake, stakeMineSeconds, stakeRequiredSats, tipWindow } from './stake';
+import {
+  compactToTarget,
+  evaluateStake,
+  jsonRpcCoinsToSats,
+  stakeMineSeconds,
+  stakeRequiredSats,
+  tipWindow,
+} from './stake';
 import { LaunchTipWindow, SteadyTipWindow } from './constants';
 
 describe('stake', () => {
@@ -38,5 +45,12 @@ describe('stake', () => {
 
   it('parses compact target', () => {
     expect(compactToTarget(0x1d00ffff) > 0n).toBe(true);
+  });
+
+  it('converts bitcoind coin amounts to sats', () => {
+    expect(jsonRpcCoinsToSats(12.34)).toBe(1_234_000_000n);
+    expect(jsonRpcCoinsToSats('2993.40552346')).toBe(299_340_552_346n);
+    expect(jsonRpcCoinsToSats('0.00000001')).toBe(1n);
+    expect(jsonRpcCoinsToSats('not-a-number')).toBe(0n);
   });
 });

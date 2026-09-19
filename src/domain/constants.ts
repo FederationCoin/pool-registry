@@ -1,4 +1,4 @@
-export const PACKAGE_VERSION = '0.2.3';
+export const PACKAGE_VERSION = '0.2.4';
 
 /** Sparrow Standard (Electrum) and node signmessage. */
 export const BitcoinSignedMessageMagic = 'Bitcoin Signed Message:\n';
