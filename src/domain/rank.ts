@@ -1,8 +1,8 @@
 import { hasDatum } from './host';
-import type { FindGroup, ListingConnect, ListingPublic } from './types';
+import type { FindGroup, ListingPublic } from './types';
 
-function datumRank(connect: ListingConnect): number {
-  return hasDatum(connect) ? 0 : 1;
+function datumRank(connections: ListingPublic['connections']): number {
+  return hasDatum(connections) ? 0 : 1;
 }
 
 function volatilityKey(v: number | undefined): number {
@@ -10,7 +10,7 @@ function volatilityKey(v: number | undefined): number {
 }
 
 export function compareFind(a: ListingPublic, b: ListingPublic): number {
-  const d = datumRank(a.connect) - datumRank(b.connect);
+  const d = datumRank(a.connections) - datumRank(b.connections);
   if (d !== 0) {
     return d;
   }

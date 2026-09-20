@@ -1,5 +1,13 @@
 import { RejectedAdvertisePort } from './constants';
-import { RegistryProblem, type AttestConnect, type HostPort, type ListingConnect, type StratumWssAdvertise } from './types';
+import {
+  MaxPoolConnections,
+  MaxPoolConnectionsPerKind,
+  RegistryProblem,
+  type ConnectionKind,
+  type HostPort,
+  type LegacyListingConnect,
+  type PoolConnection,
+} from './types';
 
 const CLUSTER_DNS = /\.svc\.cluster\.local$/i;
 const V4 =
@@ -75,20 +83,6 @@ export function registrableDomain(host: string): string {
   return last2;
 }
 
-export function advertiseHosts(connect: ListingConnect): string[] {
-  const hosts: string[] = [];
-  if (connect.kind === 'stratumOnly' || connect.kind === 'stratumAndDatum') {
-    hosts.push(connect.stratum.host);
-  }
-  if (connect.kind === 'datumOnly' || connect.kind === 'stratumAndDatum') {
-    hosts.push(connect.datum.host);
-  }
-  if (connect.wss) {
-    hosts.push(connect.wss.host);
-  }
-  return hosts;
-}
-
 export function assertWebsiteUrl(url: string | undefined): string {
   if (!url) {
     throw new RegistryProblem(400, 'badHost', 'websiteUrl is required');
@@ -112,129 +106,191 @@ export function assertWebsiteUrl(url: string | undefined): string {
   return url;
 }
 
-export function assertBrandAndConnect(websiteUrl: string, connect: ListingConnect): string {
+function badConnect(title = 'Connection list is invalid'): never {
+  throw new RegistryProblem(400, 'badConnect', title);
+}
+
+function parseHostPort(url: string): HostPort {
+  const t = url.trim();
+  if (!t || t.includes('://') || t.includes('/')) {
+    badConnect('TCP connect is host:port');
+  }
+  const idx = t.lastIndexOf(':');
+  if (idx <= 0 || idx === t.length - 1) {
+    badConnect('TCP connect is host:port');
+  }
+  const host = t.slice(0, idx);
+  const port = Number(t.slice(idx + 1));
+  assertPublicAdvertiseHost(host);
+  assertAdvertisePort(port);
+  return { host, port };
+}
+
+function parseWssUrl(url: string): { host: string; path: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    badConnect('WebSocket URL must be wss://host/path');
+  }
+  if (parsed.protocol !== 'wss:') {
+    badConnect('WebSocket URL must be wss://');
+  }
+  if (parsed.username || parsed.password) {
+    badConnect('WebSocket URL must not include userinfo');
+  }
+  const path = parsed.pathname || '/';
+  if (path.length > 128 || !path.startsWith('/')) {
+    badConnect('WSS path is invalid');
+  }
+  assertPublicAdvertiseHost(parsed.hostname);
+  return { host: parsed.hostname, path };
+}
+
+export function connectionHost(c: PoolConnection): string {
+  if (c.kind === 'stratumWs' || c.kind === 'datumPrimeWs') {
+    return parseWssUrl(c.url).host;
+  }
+  return parseHostPort(c.url).host;
+}
+
+export function foldConnection(c: PoolConnection): PoolConnection {
+  const kind = c.kind;
+  const url = c.url.trim();
+  if (kind === 'stratum' || kind === 'datumPrime') {
+    const hp = parseHostPort(url);
+    return { kind, url: `${hp.host.trim().toLowerCase()}:${hp.port}` };
+  }
+  const wss = parseWssUrl(url);
+  return { kind, url: `wss://${wss.host}${wss.path}` };
+}
+
+export function advertiseHosts(connections: PoolConnection[]): string[] {
+  return connections.map(connectionHost);
+}
+
+export function assertBrandAndConnect(websiteUrl: string, connections: PoolConnection[]): string {
   const websiteHost = new URL(websiteUrl).hostname;
-  const domains = new Set([registrableDomain(websiteHost), ...advertiseHosts(connect).map(registrableDomain)]);
+  const domains = new Set([registrableDomain(websiteHost), ...advertiseHosts(connections).map(registrableDomain)]);
   if (domains.size !== 1) {
     throw new RegistryProblem(400, 'mixedDomain', MixedRegistrableDomainTitle, MixedRegistrableDomainDetail);
   }
-  return [...domains][0];
+  return [...domains][0]!;
 }
 
-function assertHostPort(hp: HostPort): void {
-  assertPublicAdvertiseHost(hp.host);
-  assertAdvertisePort(hp.port);
+function isConnectionKind(v: unknown): v is ConnectionKind {
+  return v === 'stratum' || v === 'stratumWs' || v === 'datumPrime' || v === 'datumPrimeWs';
 }
 
-function assertWss(wss?: StratumWssAdvertise): void {
-  if (!wss) {
-    return;
+export function assertPoolConnections(raw: unknown): PoolConnection[] {
+  if (!Array.isArray(raw) || raw.length < 1) {
+    badConnect('At least one connection is required');
   }
-  if (wss.path.length > 128 || !wss.path.startsWith('/')) {
-    throw new RegistryProblem(400, 'badConnect', 'WSS path is invalid');
+  if (raw.length > MaxPoolConnections) {
+    badConnect('At most 12 connections');
   }
-  assertPublicAdvertiseHost(wss.host);
-}
-
-export function assertListingConnect(connect: unknown): ListingConnect {
-  if (!connect || typeof connect !== 'object') {
-    throw new RegistryProblem(400, 'badConnect', 'ListingConnect is required');
-  }
-  const c = connect as ListingConnect;
-  if (c.kind === 'stratumOnly') {
-    if (!c.stratum) {
-      throw new RegistryProblem(400, 'badConnect', 'Stratum is required');
+  const counts: Record<ConnectionKind, number> = {
+    stratum: 0,
+    stratumWs: 0,
+    datumPrime: 0,
+    datumPrimeWs: 0,
+  };
+  const out: PoolConnection[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') {
+      badConnect();
     }
-    assertHostPort(c.stratum);
-    assertWss(c.wss);
-    return c;
-  }
-  if (c.kind === 'datumOnly') {
-    if (!c.datum) {
-      throw new RegistryProblem(400, 'badConnect', 'DATUM is required');
+    const rec = item as { kind?: unknown; url?: unknown };
+    if (!isConnectionKind(rec.kind) || typeof rec.url !== 'string') {
+      badConnect();
     }
-    assertHostPort(c.datum);
-    assertWss(c.wss);
-    return c;
-  }
-  if (c.kind === 'stratumAndDatum') {
-    if (!c.stratum || !c.datum) {
-      throw new RegistryProblem(400, 'badConnect', 'Stratum and DATUM are required');
+    counts[rec.kind] += 1;
+    if (counts[rec.kind] > MaxPoolConnectionsPerKind) {
+      badConnect('At most 3 of each connection type');
     }
-    assertHostPort(c.stratum);
-    assertHostPort(c.datum);
-    assertWss(c.wss);
-    return c;
+    out.push(foldConnection({ kind: rec.kind, url: rec.url }));
   }
-  throw new RegistryProblem(400, 'badConnect', 'ListingConnect kind is invalid');
+  return out;
 }
 
-export function hasDatum(connect: ListingConnect): boolean {
-  return connect.kind === 'datumOnly' || connect.kind === 'stratumAndDatum';
-}
-
-export function advertisedAttestConnect(
-  connect: ListingConnect,
-  kind: AttestConnect['kind'],
-): AttestConnect | undefined {
-  if (kind === 'stratum') {
-    if (connect.kind === 'datumOnly') {
-      return undefined;
-    }
-    return { kind: 'stratum', host: connect.stratum.host, port: connect.stratum.port };
+export function connectionsFromLegacy(connect: LegacyListingConnect): PoolConnection[] {
+  const out: PoolConnection[] = [];
+  if (connect.kind === 'stratumOnly' || connect.kind === 'stratumAndDatum') {
+    out.push({ kind: 'stratum', url: `${connect.stratum.host}:${connect.stratum.port}` });
   }
-  if (connect.kind === 'stratumOnly') {
-    return undefined;
+  if (connect.kind === 'datumOnly' || connect.kind === 'stratumAndDatum') {
+    out.push({ kind: 'datumPrime', url: `${connect.datum.host}:${connect.datum.port}` });
   }
-  return { kind: 'datum', host: connect.datum.host, port: connect.datum.port };
+  if (connect.wss) {
+    out.push({ kind: 'stratumWs', url: `wss://${connect.wss.host}${connect.wss.path}` });
+  }
+  return out;
 }
 
-function foldHost(host: string): string {
-  return host.trim().toLowerCase();
+function isLegacyConnect(v: unknown): v is LegacyListingConnect {
+  if (!v || typeof v !== 'object') {
+    return false;
+  }
+  const kind = (v as { kind?: unknown }).kind;
+  return kind === 'stratumOnly' || kind === 'datumOnly' || kind === 'stratumAndDatum';
 }
 
-export function attestConnectEquals(a: AttestConnect, b: AttestConnect): boolean {
-  return a.kind === b.kind && foldHost(a.host) === foldHost(b.host) && a.port === b.port;
+export function listingConnections(row: { connections?: unknown; connect?: unknown }): PoolConnection[] {
+  if (Array.isArray(row.connections) && row.connections.length > 0) {
+    return assertPoolConnections(row.connections);
+  }
+  if (isLegacyConnect(row.connect)) {
+    return connectionsFromLegacy(row.connect);
+  }
+  badConnect('At least one connection is required');
 }
 
-export function attestConnectMatchesListing(recorded: AttestConnect | undefined, listing: ListingConnect): boolean {
+export function hasDatum(connections: PoolConnection[]): boolean {
+  return connections.some((c) => c.kind === 'datumPrime' || c.kind === 'datumPrimeWs');
+}
+
+function foldUrl(url: string): string {
+  return url.trim().toLowerCase();
+}
+
+export function connectionEquals(a: PoolConnection, b: PoolConnection): boolean {
+  return a.kind === b.kind && foldUrl(a.url) === foldUrl(b.url);
+}
+
+export function attestConnectMatchesListing(
+  recorded: PoolConnection | undefined,
+  connections: PoolConnection[],
+): boolean {
   if (!recorded) {
     return false;
   }
-  const current = advertisedAttestConnect(listing, recorded.kind);
-  return !!current && attestConnectEquals(recorded, current);
+  return connections.some((c) => connectionEquals(c, recorded));
 }
 
-export function assertAttestConnect(listing: ListingConnect, connect: unknown): AttestConnect {
+export function assertAttestConnect(connections: PoolConnection[], connect: unknown): PoolConnection {
   if (!connect || typeof connect !== 'object') {
     throw new RegistryProblem(
       400,
       'connectChanged',
-      'That Stratum or DATUM host is not what this listing advertises now.',
+      'That endpoint is not what this listing advertises now.',
     );
   }
-  const c = connect as AttestConnect;
-  if (c.kind !== 'stratum' && c.kind !== 'datum') {
+  const rec = connect as { kind?: unknown; url?: unknown };
+  if (!isConnectionKind(rec.kind) || typeof rec.url !== 'string') {
     throw new RegistryProblem(
       400,
       'connectChanged',
-      'That Stratum or DATUM host is not what this listing advertises now.',
+      'That endpoint is not what this listing advertises now.',
     );
   }
-  if (typeof c.host !== 'string' || !Number.isInteger(c.port)) {
+  const want = foldConnection({ kind: rec.kind, url: rec.url });
+  const current = connections.find((c) => connectionEquals(c, want));
+  if (!current) {
     throw new RegistryProblem(
       400,
       'connectChanged',
-      'That Stratum or DATUM host is not what this listing advertises now.',
+      'That endpoint is not what this listing advertises now.',
     );
   }
-  const current = advertisedAttestConnect(listing, c.kind);
-  if (!current || !attestConnectEquals({ kind: c.kind, host: c.host, port: c.port }, current)) {
-    throw new RegistryProblem(
-      400,
-      'connectChanged',
-      'That Stratum or DATUM host is not what this listing advertises now.',
-    );
-  }
-  return { kind: c.kind, host: current.host, port: current.port };
+  return current;
 }

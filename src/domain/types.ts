@@ -12,27 +12,24 @@ export type CommandKind =
 export type HostPort = { host: string; port: number };
 export type StratumWssAdvertise = { host: string; path: string };
 
-export type StratumOnlyAdvertise = {
-  kind: 'stratumOnly';
-  stratum: HostPort;
-  wss?: StratumWssAdvertise;
-};
-export type DatumOnlyAdvertise = {
-  kind: 'datumOnly';
-  datum: HostPort;
-  wss?: StratumWssAdvertise;
-};
-export type StratumAndDatumAdvertise = {
-  kind: 'stratumAndDatum';
-  stratum: HostPort;
-  datum: HostPort;
-  wss?: StratumWssAdvertise;
-};
-export type ListingConnect = StratumOnlyAdvertise | DatumOnlyAdvertise | StratumAndDatumAdvertise;
+export const ConnectionKinds = ['stratum', 'stratumWs', 'datumPrime', 'datumPrimeWs'] as const;
+export type ConnectionKind = (typeof ConnectionKinds)[number];
 
-export type AttestConnect =
-  | { kind: 'stratum'; host: string; port: number }
-  | { kind: 'datum'; host: string; port: number };
+export type PoolConnection = {
+  kind: ConnectionKind;
+  url: string;
+};
+
+export const MaxPoolConnections = 12;
+export const MaxPoolConnectionsPerKind = 3;
+
+/** Old Dynamo items only. Reads map this to PoolConnection[]. */
+export type LegacyListingConnect =
+  | { kind: 'stratumOnly'; stratum: HostPort; wss?: StratumWssAdvertise }
+  | { kind: 'datumOnly'; datum: HostPort; wss?: StratumWssAdvertise }
+  | { kind: 'stratumAndDatum'; stratum: HostPort; datum: HostPort; wss?: StratumWssAdvertise };
+
+export type AttestConnect = PoolConnection;
 
 export type SigningEnvelope = {
   messageVersion: number;
@@ -111,7 +108,9 @@ export type ListingRecord = {
   distributionAlgo?: string;
   templateWriteup?: string;
   feeText?: string;
-  connect: ListingConnect;
+  connections: PoolConnection[];
+  /** Old Dynamo items. Prefer connections. */
+  connect?: LegacyListingConnect;
   coinbaseTag: string;
   lastAttributedBlockAt?: string;
   hiddenAt?: string;
@@ -140,7 +139,7 @@ export type ListingPublic = {
   distributionAlgo?: string;
   templateWriteup?: string;
   feeText?: string;
-  connect: ListingConnect;
+  connections: PoolConnection[];
   coinbaseTag: string;
   metrics?: MetricsOverlay;
   reviewScore: number;
@@ -149,6 +148,8 @@ export type ListingPublic = {
   createdAt?: string;
   attestationCount: number;
   listerConfirmedCoinbasePayee: boolean;
+  /** Set only when GET carried a verified envelope for this attester. Never other wallets. */
+  attestedByYou?: PoolConnection;
 };
 
 export type FindGroup = {

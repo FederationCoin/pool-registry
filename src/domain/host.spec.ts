@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   assertAttestConnect,
   assertBrandAndConnect,
-  assertListingConnect,
+  assertPoolConnections,
   assertPublicAdvertiseHost,
   assertWebsiteUrl,
+  listingConnections,
   registrableDomain,
 } from './host';
 import { RegistryProblem } from './types';
@@ -37,25 +38,20 @@ describe('host', () => {
 
   it('rejects RPC port on connect', () => {
     expect(() =>
-      assertListingConnect({ kind: 'stratumOnly', stratum: { host: 'pool.example.com', port: 35332 } }),
+      assertPoolConnections([{ kind: 'stratum', url: 'pool.example.com:35332' }]),
     ).toThrow(RegistryProblem);
     expect(
-      assertListingConnect({
-        kind: 'datumOnly',
-        datum: { host: 'datum.example.com', port: 28916 },
-        wss: { host: 'wss.example.com', path: '/stratum' },
-      }).kind,
-    ).toBe('datumOnly');
+      assertPoolConnections([
+        { kind: 'datumPrime', url: 'datum.example.com:28916' },
+        { kind: 'stratumWs', url: 'wss://wss.example.com/stratum' },
+      ])[0]!.kind,
+    ).toBe('datumPrime');
     expect(() =>
-      assertListingConnect({ kind: 'stratumOnly', stratum: { host: 'pool.example.com', port: 6379 } }),
+      assertPoolConnections([{ kind: 'stratum', url: 'pool.example.com:6379' }]),
     ).toThrow(RegistryProblem);
-    expect(() => assertListingConnect({ kind: 'nope' })).toThrow(RegistryProblem);
+    expect(() => assertPoolConnections([{ kind: 'nope', url: 'x.example.com:1' }])).toThrow(RegistryProblem);
     expect(() =>
-      assertListingConnect({
-        kind: 'stratumOnly',
-        stratum: { host: 'pool.example.com', port: 23334 },
-        wss: { host: 'wss.example.com', path: 'no-slash' },
-      }),
+      assertPoolConnections([{ kind: 'stratumWs', url: 'ws://wss.example.com/stratum' }]),
     ).toThrow(RegistryProblem);
   });
 
@@ -65,37 +61,69 @@ describe('host', () => {
     expect(registrableDomain('pool.co.uk')).toBe('pool.co.uk');
     expect(registrableDomain('a.pool.co.uk')).toBe('pool.co.uk');
     expect(
-      assertBrandAndConnect('https://example.com/pool', {
-        kind: 'stratumAndDatum',
-        stratum: { host: 'stratum.example.com', port: 23334 },
-        datum: { host: 'datum.example.com', port: 28916 },
-      }),
+      assertBrandAndConnect('https://example.com/pool', [
+        { kind: 'stratum', url: 'stratum.example.com:23334' },
+        { kind: 'datumPrime', url: 'datum.example.com:28916' },
+      ]),
     ).toBe('example.com');
     expect(() =>
-      assertBrandAndConnect('https://example.com', {
-        kind: 'stratumOnly',
-        stratum: { host: 'stratum.other.com', port: 23334 },
+      assertBrandAndConnect('https://example.com', [{ kind: 'stratum', url: 'stratum.other.com:23334' }]),
+    ).toThrow(RegistryProblem);
+  });
+
+  it('accepts AttestConnect only for a currently advertised endpoint', () => {
+    const listing = [
+      { kind: 'stratum' as const, url: 'stratum.example.com:23334' },
+      { kind: 'datumPrime' as const, url: 'datum.example.com:28916' },
+    ];
+    expect(assertAttestConnect(listing, { kind: 'stratum', url: 'Stratum.example.com:23334' }).kind).toBe('stratum');
+    expect(() => assertAttestConnect(listing, { kind: 'stratum', url: 'stratum.example.com:1' })).toThrow(
+      RegistryProblem,
+    );
+    expect(() =>
+      assertAttestConnect([{ kind: 'stratum', url: 'stratum.example.com:23334' }], {
+        kind: 'datumPrime',
+        url: 'datum.example.com:28916',
       }),
     ).toThrow(RegistryProblem);
   });
 
-  it('accepts AttestConnect only for a currently advertised host:port', () => {
-    const listing = {
-      kind: 'stratumAndDatum' as const,
-      stratum: { host: 'stratum.example.com', port: 23334 },
-      datum: { host: 'datum.example.com', port: 28916 },
-    };
-    expect(assertAttestConnect(listing, { kind: 'stratum', host: 'Stratum.example.com', port: 23334 }).kind).toBe(
-      'stratum',
-    );
-    expect(() => assertAttestConnect(listing, { kind: 'stratum', host: 'stratum.example.com', port: 1 })).toThrow(
+  it('maps a legacy connect blob to connections', () => {
+    expect(
+      listingConnections({
+        connect: {
+          kind: 'stratumAndDatum',
+          stratum: { host: 'stratum.example.com', port: 23334 },
+          datum: { host: 'datum.example.com', port: 28916 },
+          wss: { host: 'pool.example.com', path: '/stratum' },
+        },
+      }),
+    ).toEqual([
+      { kind: 'stratum', url: 'stratum.example.com:23334' },
+      { kind: 'datumPrime', url: 'datum.example.com:28916' },
+      { kind: 'stratumWs', url: 'wss://pool.example.com/stratum' },
+    ]);
+  });
+
+  it('caps connections at twelve and three per kind', () => {
+    const three = [
+      { kind: 'stratum' as const, url: 'a.example.com:1' },
+      { kind: 'stratum' as const, url: 'b.example.com:2' },
+      { kind: 'stratum' as const, url: 'c.example.com:3' },
+    ];
+    expect(assertPoolConnections(three)).toHaveLength(3);
+    expect(() => assertPoolConnections([...three, { kind: 'stratum', url: 'd.example.com:4' }])).toThrow(
       RegistryProblem,
     );
-    expect(() =>
-      assertAttestConnect(
-        { kind: 'stratumOnly', stratum: { host: 'stratum.example.com', port: 23334 } },
-        { kind: 'datum', host: 'datum.example.com', port: 28916 },
-      ),
-    ).toThrow(RegistryProblem);
+    const twelve = (['stratum', 'stratumWs', 'datumPrime', 'datumPrimeWs'] as const).flatMap((kind) =>
+      [1, 2, 3].map((n) => ({
+        kind,
+        url: kind.endsWith('Ws') ? `wss://${kind}${n}.example.com/x` : `${kind}${n}.example.com:${20000 + n}`,
+      })),
+    );
+    expect(assertPoolConnections(twelve)).toHaveLength(12);
+    expect(() => assertPoolConnections([...twelve, { kind: 'stratum', url: 'extra.example.com:9' }])).toThrow(
+      RegistryProblem,
+    );
   });
 });

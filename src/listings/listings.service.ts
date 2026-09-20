@@ -6,6 +6,7 @@ import {
   FindPageSize,
   HiddenAfterMs,
   LiveTenants,
+  OpenSeasonLiveCap,
   TargetSpacingSeconds,
   TokenAttestationStore,
   TokenChainView,
@@ -20,7 +21,7 @@ import {
   type ChainId,
 } from '../domain/constants';
 import { assertEnvelope } from '../domain/envelope';
-import { assertAttestConnect, assertBrandAndConnect, assertListingConnect, assertWebsiteUrl, attestConnectMatchesListing } from '../domain/host';
+import { assertAttestConnect, assertBrandAndConnect, assertPoolConnections, assertWebsiteUrl, attestConnectMatchesListing, listingConnections } from '../domain/host';
 import { assertP2wpkh } from '../domain/wallet';
 import { compareFind, decodeCursor, encodeCursor, groupFind } from '../domain/rank';
 import { assertTipWindow, evaluateStake, isLiveAt, stakeMineSeconds, stakeRequiredSats, tipWindow } from '../domain/stake';
@@ -31,7 +32,7 @@ import {
   type AttestConnect,
   type CommandKind,
   type FindGroup,
-  type ListingConnect,
+  type PoolConnection,
   type ListingPublic,
   type ListingRecord,
   type ListingTrustRow,
@@ -59,7 +60,7 @@ export type RegisterBody = {
   distributionAlgo?: string;
   templateWriteup?: string;
   feeText?: string;
-  connect: ListingConnect;
+  connections: PoolConnection[];
 };
 
 export type UpdateBody = {
@@ -70,7 +71,7 @@ export type UpdateBody = {
   distributionAlgo?: string;
   templateWriteup?: string;
   feeText?: string;
-  connect: ListingConnect;
+  connections: PoolConnection[];
 };
 
 export type AttestBody = {
@@ -115,8 +116,9 @@ export class ListingsService {
     const listerConfirmedCoinbasePayee = window.some(
       (cb) => coinbaseHasDeclaredTag(cb.tag, row.coinbaseTag) && cb.addresses.includes(row.operatorWallet),
     );
+    const connections = listingConnections(row);
     const attestationCount = (await this.attestations.listByPool(row.poolId)).filter((a) =>
-      attestConnectMatchesListing(a.connect, row.connect),
+      attestConnectMatchesListing(a.connect, connections),
     ).length;
     const next: ListingTrustRow = {
       chain: row.chain,
@@ -129,7 +131,7 @@ export class ListingsService {
     return next;
   }
 
-  async toPublic(row: ListingRecord): Promise<ListingPublic> {
+  async toPublic(row: ListingRecord, attesterWallet?: string): Promise<ListingPublic> {
     const revs = await this.reviews.listByPool(row.poolId);
     const scores = revs.map((r) => r.starRating);
     const reviewScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
@@ -138,6 +140,14 @@ export class ListingsService {
     let trust = await this.trust.getTrust(row.chain, row.poolId);
     if (!trust || trust.asOfHeight !== tip.height) {
       trust = await this.refreshTrust(row);
+    }
+    const connections = listingConnections(row);
+    let attestedByYou: PoolConnection | undefined;
+    if (attesterWallet) {
+      const mine = await this.attestations.get(attesterWallet, row.poolId);
+      if (mine?.connect && attestConnectMatchesListing(mine.connect, connections)) {
+        attestedByYou = mine.connect;
+      }
     }
     return {
       poolId: row.poolId,
@@ -148,7 +158,7 @@ export class ListingsService {
       ...(row.distributionAlgo ? { distributionAlgo: row.distributionAlgo } : {}),
       ...(row.templateWriteup ? { templateWriteup: row.templateWriteup } : {}),
       ...(row.feeText ? { feeText: row.feeText } : {}),
-      connect: row.connect,
+      connections,
       coinbaseTag: censorTagForDisplay(row.coinbaseTag),
       listingDomain: row.listingDomain,
       attestationCount: trust.attestationCount,
@@ -158,6 +168,7 @@ export class ListingsService {
       hasHostileFlag,
       ...(row.heartbeatAt ? { heartbeatAt: row.heartbeatAt } : {}),
       createdAt: row.createdAt,
+      ...(attestedByYou ? { attestedByYou } : {}),
     };
   }
 
@@ -169,7 +180,13 @@ export class ListingsService {
     return { groups: page, items: page.flatMap((g) => g.listings), cursor: next };
   }
 
-  async findActive(chain: ChainId, q: string | undefined, cursor: string | undefined, ip: string) {
+  async findActive(
+    chain: ChainId,
+    q: string | undefined,
+    cursor: string | undefined,
+    ip: string,
+    attesterWallet?: string,
+  ) {
     this.assertLiveTenant(chain);
     await this.ratePublic(ip);
     const now = Date.now();
@@ -185,7 +202,7 @@ export class ListingsService {
           r.coinbaseTag.toLowerCase().includes(needle),
       );
     }
-    const items = (await Promise.all(rows.map((r) => this.toPublic(r)))).sort(compareFind);
+    const items = (await Promise.all(rows.map((r) => this.toPublic(r, attesterWallet)))).sort(compareFind);
     const paged = this.pageGroups(groupFind(items), cursor);
     const inactive = await this.listings.queryInactive(chain, q);
     return { ...paged, inactiveMatchHint: inactive.items.length > 0 };
@@ -235,21 +252,26 @@ export class ListingsService {
     const tip = await this.chain.getTip(chain);
     const mineSeconds = stakeMineSeconds(chain);
     const required = stakeRequiredSats(tip.nBits, tip.subsidySats, mineSeconds);
+    const live = (await this.listings.listAll(chain)).filter(
+      (r) => !r.hiddenAt && isLiveAt(r.createdAt, r.lastAttributedBlockAt, Date.now()),
+    );
+    const holdBlocks = live.length >= OpenSeasonLiveCap ? DifficultyPeriodBlocks : 0;
     return {
       signingBlockHeight: tip.height,
       signingBlockHash: tip.hash,
       stakeRequiredSats: required.toString(),
       mineSeconds,
+      holdBlocks,
     };
   }
 
   private prepareListingFields(body: RegisterBody | UpdateBody) {
     assertListingNameAllowed(body.name);
     const websiteUrl = assertWebsiteUrl(body.websiteUrl);
-    const connect = assertListingConnect(body.connect);
-    const listingDomain = assertBrandAndConnect(websiteUrl, connect);
+    const connections = assertPoolConnections(body.connections);
+    const listingDomain = assertBrandAndConnect(websiteUrl, connections);
     const coinbaseTag = assertCoinbaseTag(body.coinbaseTag);
-    return { websiteUrl, connect, listingDomain, coinbaseTag };
+    return { websiteUrl, connections, listingDomain, coinbaseTag };
   }
 
   async register(chain: ChainId, env: SigningEnvelope, body: RegisterBody, ip: string) {
@@ -281,7 +303,7 @@ export class ListingsService {
       ...(body.distributionAlgo ? { distributionAlgo: body.distributionAlgo } : {}),
       ...(body.templateWriteup ? { templateWriteup: body.templateWriteup } : {}),
       ...(body.feeText ? { feeText: body.feeText } : {}),
-      connect: fields.connect,
+      connections: fields.connections,
       coinbaseTag: fields.coinbaseTag,
       listingDomain: fields.listingDomain,
       lastAttributedBlockAt: createdAt,
@@ -309,7 +331,7 @@ export class ListingsService {
       distributionAlgo: body.distributionAlgo,
       templateWriteup: body.templateWriteup,
       feeText: body.feeText,
-      connect: fields.connect,
+      connections: fields.connections,
       coinbaseTag: fields.coinbaseTag,
       listingDomain: fields.listingDomain,
     };
@@ -395,7 +417,8 @@ export class ListingsService {
     if (!listing || listing.chain !== chain) {
       throw new RegistryProblem(404, 'notFound', 'Listing was not found');
     }
-    const connect = assertAttestConnect(listing.connect, body.connect);
+    const connections = listingConnections(listing);
+    const connect = assertAttestConnect(connections, body.connect);
     const tip = await this.chain.getTip(chain);
     const from = Math.max(0, tip.height - DifficultyPeriodBlocks + 1);
     if (body.height < from || body.height > tip.height) {
