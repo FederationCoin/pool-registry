@@ -159,7 +159,16 @@ export function foldConnection(c: PoolConnection): PoolConnection {
   const url = c.url.trim();
   if (kind === 'stratum' || kind === 'datumPrime') {
     const hp = parseHostPort(url);
-    return { kind, url: `${hp.host.trim().toLowerCase()}:${hp.port}` };
+    const folded: PoolConnection = { kind, url: `${hp.host.trim().toLowerCase()}:${hp.port}` };
+    if (kind === 'datumPrime') {
+      if (c.identityPubkey) {
+        folded.identityPubkey = c.identityPubkey;
+      }
+      if (c.keysUrl) {
+        folded.keysUrl = c.keysUrl;
+      }
+    }
+    return folded;
   }
   const wss = parseWssUrl(url);
   return { kind, url: `wss://${wss.host}${wss.path}` };
@@ -180,6 +189,57 @@ export function assertBrandAndConnect(websiteUrl: string, connections: PoolConne
 
 function isConnectionKind(v: unknown): v is ConnectionKind {
   return v === 'stratum' || v === 'stratumWs' || v === 'datumPrime' || v === 'datumPrimeWs';
+}
+
+function assertHttpsKeysUrl(raw: string): string {
+  if (raw.length > 512) {
+    badConnect('Keys URL is too long');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    badConnect('Keys URL is invalid');
+  }
+  if (parsed.protocol !== 'https:') {
+    badConnect('Keys URL must be https');
+  }
+  if (parsed.username || parsed.password) {
+    badConnect('Keys URL must not include userinfo');
+  }
+  return raw;
+}
+
+function datumPrimeExtras(
+  kind: ConnectionKind,
+  item: object,
+): { identityPubkey?: string; keysUrl?: string } {
+  const rec = item as { identityPubkey?: unknown; keysUrl?: unknown };
+  if (rec.identityPubkey != null && typeof rec.identityPubkey !== 'string') {
+    badConnect('Identity pubkey must be 128 hex characters');
+  }
+  if (rec.keysUrl != null && typeof rec.keysUrl !== 'string') {
+    badConnect('Keys URL is invalid');
+  }
+  const pubRaw = typeof rec.identityPubkey === 'string' ? rec.identityPubkey.trim().toLowerCase() : '';
+  const urlRaw = typeof rec.keysUrl === 'string' ? rec.keysUrl.trim() : '';
+  if (kind !== 'datumPrime') {
+    if (pubRaw || urlRaw || rec.identityPubkey != null || rec.keysUrl != null) {
+      badConnect('Identity pubkey is only for DATUM Prime Pool');
+    }
+    return {};
+  }
+  const out: { identityPubkey?: string; keysUrl?: string } = {};
+  if (pubRaw) {
+    if (!/^[0-9a-f]{128}$/.test(pubRaw)) {
+      badConnect('Identity pubkey must be 128 hex characters');
+    }
+    out.identityPubkey = pubRaw;
+  }
+  if (urlRaw) {
+    out.keysUrl = assertHttpsKeysUrl(urlRaw);
+  }
+  return out;
 }
 
 export function assertPoolConnections(raw: unknown): PoolConnection[] {
@@ -208,7 +268,8 @@ export function assertPoolConnections(raw: unknown): PoolConnection[] {
     if (counts[rec.kind] > MaxPoolConnectionsPerKind) {
       badConnect('At most 3 of each connection type');
     }
-    out.push(foldConnection({ kind: rec.kind, url: rec.url }));
+    const extras = datumPrimeExtras(rec.kind, item);
+    out.push(foldConnection({ kind: rec.kind, url: rec.url, ...extras }));
   }
   return out;
 }

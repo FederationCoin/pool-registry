@@ -18,6 +18,10 @@ export type ConnectionKind = (typeof ConnectionKinds)[number];
 export type PoolConnection = {
   kind: ConnectionKind;
   url: string;
+  /** datumPrime only. 128 hex: ed25519 public key then x25519 public key. */
+  identityPubkey?: string;
+  /** datumPrime only. HTTPS JSON { ed25519, x25519 }. */
+  keysUrl?: string;
 };
 
 export const MaxPoolConnections = 12;

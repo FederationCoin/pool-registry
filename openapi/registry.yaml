@@ -561,6 +561,20 @@ components:
           description: >
             Stratum and DATUM Prime are host:port. Stratum WS and DATUM Prime WS
             are wss://host/path.
+        identityPubkey:
+          type: string
+          minLength: 128
+          maxLength: 128
+          pattern: '^[0-9a-f]{128}$'
+          description: >
+            datumPrime only. Ed25519 public key then X25519 public key, 128 lowercase hex.
+            Absent on older listings. Not valid on Stratum rows.
+        keysUrl:
+          type: string
+          maxLength: 512
+          description: >
+            datumPrime only. HTTPS JSON document { ed25519, x25519 }, each 64 hex.
+            No private keys. Optional.
     RegisterListing:
       type: object
       additionalProperties: false
