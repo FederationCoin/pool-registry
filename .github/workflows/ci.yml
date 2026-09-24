@@ -51,6 +51,8 @@ jobs:
         run: |
           set -eu
           if git cat-file -e "origin/${{ github.base_ref }}:openapi/registry.yaml" 2>/dev/null; then
+            git show "origin/${{ github.base_ref }}:openapi/registry.yaml" > /tmp/registry-base.yaml
+            git show "origin/${{ github.base_ref }}:package.json" > /tmp/registry-base-package.json
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -58,8 +60,13 @@ jobs:
           fi
       - name: oasdiff breaking
         if: github.event_name == 'pull_request' && steps.spec.outputs.exists == 'true'
-        uses: oasdiff/oasdiff-action/breaking@main
-        with:
-          base: origin/${{ github.base_ref }}/openapi/registry.yaml
-          revision: openapi/registry.yaml
-          fail-on-diff: true
+        run: |
+          set -eu
+          curl -fsSL -o /tmp/oasdiff.tgz https://github.com/oasdiff/oasdiff/releases/download/v1.32.1/oasdiff_1.32.1_linux_amd64.tar.gz
+          tar -C /tmp -xzf /tmp/oasdiff.tgz
+          sudo mv /tmp/oasdiff /usr/local/bin/oasdiff
+          python3 .github/contract-bump.py \
+            /tmp/registry-base.yaml \
+            openapi/registry.yaml \
+            /tmp/registry-base-package.json \
+            package.json
