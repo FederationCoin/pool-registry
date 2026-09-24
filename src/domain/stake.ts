@@ -34,6 +34,23 @@ export function stakeRequiredSats(nBits: number, subsidySats: bigint, mineSecond
   return (hashes * subsidySats) / expected;
 }
 
+const CoinSats = 100_000_000n;
+
+/** bitcoind JSON-RPC amounts are coins (8 decimals), not sats. */
+export function jsonRpcCoinsToSats(amount: unknown): bigint {
+  if (typeof amount === 'number' && Number.isFinite(amount)) {
+    return BigInt(Math.round(amount * 1e8));
+  }
+  if (typeof amount !== 'string' || !/^-?\d+(\.\d{1,8})?$/.test(amount)) {
+    return 0n;
+  }
+  const neg = amount.startsWith('-');
+  const raw = neg ? amount.slice(1) : amount;
+  const [whole, frac = ''] = raw.split('.');
+  const sats = BigInt(whole) * CoinSats + BigInt((frac + '00000000').slice(0, 8));
+  return neg ? -sats : sats;
+}
+
 export function tipWindow(args: {
   height: number;
   lastRetargetMedianSpacingSeconds?: number;

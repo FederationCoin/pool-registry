@@ -74,7 +74,7 @@ export class MemoryRateAdapters
     if (prev && prev.asOfHeight > row.asOfHeight) {
       return;
     }
-    if (prev && prev.asOfHeight === row.asOfHeight && JSON.stringify(prev) !== JSON.stringify(row)) {
+    if (prev && prev.asOfHeight === row.asOfHeight && BigInt(row.balanceSats) <= BigInt(prev.balanceSats)) {
       return;
     }
     this.stake.set(key, { ...row });

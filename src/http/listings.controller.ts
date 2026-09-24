@@ -1,8 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { ListingsService, type AttestBody, type RegisterBody, type UpdateBody } from '../listings/listings.service';
 import { ChainHeaderGuard } from './chain.guard';
-import { SigningEnvelopeGuard } from './envelope.guard';
+import { SigningEnvelopeGuard, tryWalletFromAuthorization } from './envelope.guard';
 import { Chain, ClientIp, Envelope } from './params';
 import type { ChainId } from '../domain/constants';
 import type { SigningEnvelope } from '../domain/types';
@@ -18,8 +18,9 @@ export class ListingsController {
     @Query('q') q: string | undefined,
     @Query('cursor') cursor: string | undefined,
     @ClientIp() ip: string,
+    @Headers('authorization') authorization: string | undefined,
   ) {
-    return this.listings.findActive(chain, q, cursor, ip);
+    return this.listings.findActive(chain, q, cursor, ip, tryWalletFromAuthorization(authorization));
   }
 
   @Get('listings/inactive')

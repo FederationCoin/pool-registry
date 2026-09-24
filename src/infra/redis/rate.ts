@@ -60,23 +60,24 @@ export class RedisRateAdapters
   }
 
   async get(chain: ChainId, wallet: string): Promise<StakeCacheRow | undefined> {
-    const raw = await this.redis.get(`st:${chain}:${wallet}`);
+    const raw = await this.redis.get(`st2:${chain}:${wallet}`);
     return raw ? (JSON.parse(raw) as StakeCacheRow) : undefined;
   }
 
   async put(row: StakeCacheRow): Promise<void> {
-    const key = `st:${row.chain}:${row.wallet}`;
+    const key = `st2:${row.chain}:${row.wallet}`;
     const prevRaw = await this.redis.get(key);
     if (prevRaw) {
       const prev = JSON.parse(prevRaw) as StakeCacheRow;
       if (prev.asOfHeight > row.asOfHeight) {
         return;
       }
-      if (prev.asOfHeight === row.asOfHeight && prevRaw !== JSON.stringify(row)) {
+      if (prev.asOfHeight === row.asOfHeight && BigInt(row.balanceSats) <= BigInt(prev.balanceSats)) {
         return;
       }
     }
-    await this.redis.set(key, JSON.stringify(row), 'EX', DifficultyPeriodBlocks * TargetSpacingSeconds);
+    const ttl = BigInt(row.balanceSats) === 0n ? 60 : DifficultyPeriodBlocks * TargetSpacingSeconds;
+    await this.redis.set(key, JSON.stringify(row), 'EX', ttl);
   }
 
   async getTrust(chain: ChainId, poolId: string): Promise<ListingTrustRow | undefined> {

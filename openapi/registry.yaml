@@ -1,21 +1,23 @@
 openapi: 3.0.3
 info:
   title: FederationCoin pool registry
-  version: 0.2.2
+  version: 0.3.0
   description: >
-    Frozen /v1 (0.2.2 post-impl). Self-hostable NestJS registry
+    Frozen /v1 (0.3.0). Self-hostable NestJS registry
     (FederationCoin/pool-registry), not federation-pool WSS. Domain
     operations require X-FederationCoin-Chain (testnet or main). Writes
     also require Authorization Bearer (base64url SigningEnvelope JSON),
     not an IdP JWT. CORS origins come from SecretStore (origin mill:
     mine.federationcoin.org); no wildcard; no credentials. Dummy MAIN is
-    not launched. additionalProperties false. Opaque FindCursor. ListingConnect
-    is oneOf three kinds. websiteUrl and coinbaseTag are required writes.
-    Brand, Stratum, and DATUM share one registrable domain. Find groups by
-    that domain and ranks attestations whose recorded AttestConnect still
-    matches the advertised host:port. GET /v1/sign-context fills signing
-    height, hash, and tenant stake seconds (testnet 3600, main 86400).
-    Rebuttals return 403 rebuttalDisabled.
+    not launched. additionalProperties false. Opaque FindCursor.
+    connections is a list of typed endpoints (Stratum, Stratum WS,
+    DATUM Prime, DATUM Prime WS; max 12, 3 of each). websiteUrl and
+    coinbaseTag are required writes. Brand and advertised hosts share
+    one registrable domain. Find groups by that domain and ranks
+    attestations whose recorded connection still matches a list item.
+    GET /v1/sign-context fills signing height, hash, tenant stake
+    seconds (testnet 3600, main 86400), and holdBlocks. Rebuttals
+    return 403 rebuttalDisabled.
 servers:
   - url: https://pools.federationcoin.org
     description: Origin hosted instance on the shared ALB (when epic 2 executes)
@@ -76,6 +78,12 @@ paths:
       tags: [find]
       summary: Find active listings
       operationId: findActiveListings
+      security:
+        - {}
+        - signingEnvelope: []
+      description: >
+        Optional Bearer (verified envelope) annotates attestedByYou on
+        each item for that wallet only. Never other attesters' wallets.
       parameters:
         - name: q
           in: query
@@ -517,7 +525,7 @@ components:
           type: string
           minLength: 64
           maxLength: 64
-          description: SHA-256 hex of RFC 8785 JCS command bytes
+          description: SHA-256 hex of RFC 8785 JCS of command, signingBlockHeight, and signingBlockHash
         signature:
           type: string
           maxLength: 144
@@ -539,82 +547,38 @@ components:
         - postReview
         - postRebuttal
         - attestListing
-    HostPort:
+    PoolConnection:
       type: object
       additionalProperties: false
-      required: [host, port]
+      required: [kind, url]
       properties:
-        host:
+        kind:
           type: string
-          maxLength: 253
-        port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-    StratumWssAdvertise:
-      type: object
-      additionalProperties: false
-      required: [host, path]
-      properties:
-        host:
+          enum: [stratum, stratumWs, datumPrime, datumPrimeWs]
+        url:
           type: string
-          maxLength: 253
-        path:
+          maxLength: 512
+          description: >
+            Stratum and DATUM Prime are host:port. Stratum WS and DATUM Prime WS
+            are wss://host/path.
+        identityPubkey:
           type: string
+          minLength: 128
           maxLength: 128
-    StratumOnlyAdvertise:
-      type: object
-      additionalProperties: false
-      required: [kind, stratum]
-      properties:
-        kind:
+          pattern: '^[0-9a-f]{128}$'
+          description: >
+            datumPrime only. Ed25519 public key then X25519 public key, 128 lowercase hex.
+            Absent on older listings. Not valid on Stratum rows.
+        keysUrl:
           type: string
-          enum: [stratumOnly]
-        stratum:
-          $ref: "#/components/schemas/HostPort"
-        wss:
-          $ref: "#/components/schemas/StratumWssAdvertise"
-    DatumOnlyAdvertise:
-      type: object
-      additionalProperties: false
-      required: [kind, datum]
-      properties:
-        kind:
-          type: string
-          enum: [datumOnly]
-        datum:
-          $ref: "#/components/schemas/HostPort"
-        wss:
-          $ref: "#/components/schemas/StratumWssAdvertise"
-    StratumAndDatumAdvertise:
-      type: object
-      additionalProperties: false
-      required: [kind, stratum, datum]
-      properties:
-        kind:
-          type: string
-          enum: [stratumAndDatum]
-        stratum:
-          $ref: "#/components/schemas/HostPort"
-        datum:
-          $ref: "#/components/schemas/HostPort"
-        wss:
-          $ref: "#/components/schemas/StratumWssAdvertise"
-    ListingConnect:
-      oneOf:
-        - $ref: "#/components/schemas/StratumOnlyAdvertise"
-        - $ref: "#/components/schemas/DatumOnlyAdvertise"
-        - $ref: "#/components/schemas/StratumAndDatumAdvertise"
-      discriminator:
-        propertyName: kind
-        mapping:
-          stratumOnly: "#/components/schemas/StratumOnlyAdvertise"
-          datumOnly: "#/components/schemas/DatumOnlyAdvertise"
-          stratumAndDatum: "#/components/schemas/StratumAndDatumAdvertise"
+          maxLength: 512
+          description: >
+            datumPrime only. HTTPS JSON document { ed25519, x25519 }, each 64 hex.
+            No private keys. Optional.
     RegisterListing:
       type: object
       additionalProperties: false
-      required: [commandKind, name, websiteUrl, coinbaseTag, connect]
+      required: [commandKind, name, websiteUrl, coinbaseTag, connections]
       properties:
         commandKind:
           type: string
@@ -625,7 +589,7 @@ components:
         websiteUrl:
           type: string
           maxLength: 256
-          description: https only; required; host must share eTLD+1 with connect
+          description: https only; required; host must share eTLD+1 with connections
         coinbaseTag:
           type: string
           maxLength: 80
@@ -639,12 +603,16 @@ components:
         feeText:
           type: string
           maxLength: 2000
-        connect:
-          $ref: "#/components/schemas/ListingConnect"
+        connections:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            $ref: "#/components/schemas/PoolConnection"
     UpdateListing:
       type: object
       additionalProperties: false
-      required: [commandKind, name, websiteUrl, coinbaseTag, connect]
+      required: [commandKind, name, websiteUrl, coinbaseTag, connections]
       properties:
         commandKind:
           type: string
@@ -655,7 +623,7 @@ components:
         websiteUrl:
           type: string
           maxLength: 256
-          description: https only; required; host must share eTLD+1 with connect
+          description: https only; required; host must share eTLD+1 with connections
         coinbaseTag:
           type: string
           maxLength: 80
@@ -669,8 +637,12 @@ components:
         feeText:
           type: string
           maxLength: 2000
-        connect:
-          $ref: "#/components/schemas/ListingConnect"
+        connections:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            $ref: "#/components/schemas/PoolConnection"
     HeartbeatListing:
       type: object
       additionalProperties: false
@@ -719,45 +691,6 @@ components:
         text:
           type: string
           maxLength: 2000
-    AttestConnectStratum:
-      type: object
-      additionalProperties: false
-      required: [kind, host, port]
-      properties:
-        kind:
-          type: string
-          enum: [stratum]
-        host:
-          type: string
-          maxLength: 253
-        port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-    AttestConnectDatum:
-      type: object
-      additionalProperties: false
-      required: [kind, host, port]
-      properties:
-        kind:
-          type: string
-          enum: [datum]
-        host:
-          type: string
-          maxLength: 253
-        port:
-          type: integer
-          minimum: 1
-          maximum: 65535
-    AttestConnect:
-      oneOf:
-        - $ref: "#/components/schemas/AttestConnectStratum"
-        - $ref: "#/components/schemas/AttestConnectDatum"
-      discriminator:
-        propertyName: kind
-        mapping:
-          stratum: "#/components/schemas/AttestConnectStratum"
-          datum: "#/components/schemas/AttestConnectDatum"
     AttestListing:
       type: object
       additionalProperties: false
@@ -774,11 +707,8 @@ components:
           minimum: 0
           description: Coinbase height in the last difficulty window with listing tag and attester payee
         connect:
-          $ref: "#/components/schemas/AttestConnect"
-          description: >
-            One advertised endpoint copied from the listing. stratumOnly
-            listings accept kind stratum; datumOnly accept datum;
-            stratumAndDatum either, never both in one write.
+          $ref: "#/components/schemas/PoolConnection"
+          description: One advertised connection from the listing. Once per wallet per pool.
     RegisterResult:
       type: object
       additionalProperties: false
@@ -825,7 +755,7 @@ components:
         - operatorWallet
         - name
         - websiteUrl
-        - connect
+        - connections
         - coinbaseTag
         - listingDomain
         - attestationCount
@@ -858,8 +788,12 @@ components:
         feeText:
           type: string
           maxLength: 2000
-        connect:
-          $ref: "#/components/schemas/ListingConnect"
+        connections:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            $ref: "#/components/schemas/PoolConnection"
         coinbaseTag:
           type: string
           maxLength: 80
@@ -886,6 +820,9 @@ components:
         createdAt:
           type: string
           format: date-time
+        attestedByYou:
+          $ref: "#/components/schemas/PoolConnection"
+          description: Present only when GET carried a verified envelope for this attester. Never other wallets.
     FindGroup:
       type: object
       additionalProperties: false
@@ -977,7 +914,7 @@ components:
     SignContext:
       type: object
       additionalProperties: false
-      required: [signingBlockHeight, signingBlockHash, stakeRequiredSats, mineSeconds]
+      required: [signingBlockHeight, signingBlockHash, stakeRequiredSats, mineSeconds, holdBlocks]
       properties:
         signingBlockHeight:
           type: integer
@@ -992,3 +929,7 @@ components:
         mineSeconds:
           type: integer
           description: testnet 3600, main 86400
+        holdBlocks:
+          type: integer
+          minimum: 0
+          description: 0 in open season; one difficulty interval when seasoned

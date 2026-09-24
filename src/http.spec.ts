@@ -65,7 +65,10 @@ function registerCmd(): RegisterBody {
     name: 'Example Pool',
     websiteUrl: 'https://example.com',
     coinbaseTag: '/Example Pool/',
-    connect: { kind: 'stratumAndDatum', stratum: { host: 'stratum.example.com', port: 23334 }, datum: { host: 'datum.example.com', port: 28916 } },
+    connections: [
+      { kind: 'stratum', url: 'stratum.example.com:23334' },
+      { kind: 'datumPrime', url: 'datum.example.com:28916' },
+    ],
   };
 }
 
@@ -94,10 +97,10 @@ describe('http registry', () => {
     await request(app.getHttpServer()).get('/v1/readyz').expect(200);
     await request(app.getHttpServer()).get('/v1/docs').expect(200);
     const spec = await request(app.getHttpServer()).get('/v1/openapi.json').expect(200);
-    expect(spec.body.info.version).toBe('0.2.2');
+    expect(spec.body.info.version).toBe('0.3.0');
     expect(spec.body.paths['/v1/listings']).toBeTruthy();
     expect(spec.body.paths['/v1/listings/{poolId}/attestations']).toBeTruthy();
-    expect(spec.body.components.schemas.AttestConnect).toBeTruthy();
+    expect(spec.body.components.schemas.PoolConnection).toBeTruthy();
     expect(spec.body.paths['/v1/sign-context']).toBeTruthy();
   });
 
@@ -157,6 +160,7 @@ describe('http registry', () => {
     expect(ctx.body.signingBlockHeight).toBe(chain.state.height);
     expect(ctx.body.signingBlockHash).toBe(chain.state.hash);
     expect(ctx.body.mineSeconds).toBe(3600);
+    expect(ctx.body.holdBlocks).toBe(0);
     expect(typeof ctx.body.stakeRequiredSats).toBe('string');
 
     const hb = { commandKind: 'heartbeatListing' as const, poolId: created.body.poolId };
@@ -221,7 +225,7 @@ describe('http registry', () => {
       name: 'Example Pool',
       websiteUrl: 'https://example.com',
       coinbaseTag: '/Example Pool/',
-      connect: { kind: 'stratumOnly' as const, stratum: { host: 'stratum.example.com', port: 23334 } },
+      connections: [{ kind: 'stratum', url: 'stratum.example.com:23334' }],
     };
     const uEnv = signEnvelope({
       priv,
@@ -265,7 +269,7 @@ describe('http registry', () => {
       name: 'Bad',
       websiteUrl: 'https://example.com',
       coinbaseTag: '/Bad/',
-      connect: { kind: 'stratumOnly', stratum: { host: '127.0.0.1', port: 23334 } },
+      connections: [{ kind: 'stratum', url: '127.0.0.1:23334' }],
     };
     const env = signEnvelope({
       priv,
@@ -315,7 +319,7 @@ describe('http registry', () => {
       name: 'Mixed',
       websiteUrl: 'https://example.com',
       coinbaseTag: '/Mixed/',
-      connect: { kind: 'stratumOnly', stratum: { host: 'stratum.other.com', port: 23334 } },
+      connections: [{ kind: 'stratum', url: 'stratum.other.com:23334' }],
     };
     const env = signEnvelope({
       priv,
@@ -363,7 +367,7 @@ describe('http registry', () => {
       commandKind: 'attestListing' as const,
       poolId: created.body.poolId,
       height: chain.state.height,
-      connect: { kind: 'stratum' as const, host: 'stratum.example.com', port: 23334 },
+      connect: { kind: 'stratum', url: 'stratum.example.com:23334' },
     };
     const aEnv = signEnvelope({
       priv: attester.priv,
@@ -385,5 +389,17 @@ describe('http registry', () => {
       .set('X-FederationCoin-Chain', 'testnet')
       .expect(200);
     expect(one.body.attestationCount).toBe(1);
+    const annotated = await request(app.getHttpServer())
+      .get('/v1/listings')
+      .set('X-FederationCoin-Chain', 'testnet')
+      .set('Authorization', bearer(aEnv))
+      .expect(200);
+    expect(annotated.body.items[0].attestedByYou).toEqual({
+      kind: 'stratum',
+      url: 'stratum.example.com:23334',
+    });
+    expect(JSON.stringify(annotated.body)).not.toContain(attester.wallet);
+    const plain = await request(app.getHttpServer()).get('/v1/listings').set('X-FederationCoin-Chain', 'testnet').expect(200);
+    expect(plain.body.items[0].attestedByYou).toBeUndefined();
   });
 });

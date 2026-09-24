@@ -2,7 +2,7 @@ import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha2';
 import { ripemd160 } from '@noble/hashes/legacy';
 import * as secp from '@noble/secp256k1';
-import { payloadHashHex } from './domain/jcs';
+import { signedPayloadHash } from './domain/jcs';
 import { sparrowMessageHash } from './domain/envelope';
 import { encodeP2wpkh } from './domain/wallet';
 import type { ChainId } from './domain/constants';
@@ -32,7 +32,7 @@ export function signEnvelope(args: {
   signingBlockHash: string;
   signingBlockHeight: number;
 }): SigningEnvelope {
-  const payloadHash = payloadHashHex(args.command);
+  const payloadHash = signedPayloadHash(args.command, args.signingBlockHeight, args.signingBlockHash);
   const hash = sparrowMessageHash(payloadHash);
   const sig = secp.sign(hash, args.priv);
   const rec = sig.recovery ?? 0;

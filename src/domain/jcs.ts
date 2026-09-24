@@ -14,6 +14,14 @@ export function payloadHashHex(command: unknown): string {
   return bytesToHex(sha256(new TextEncoder().encode(jcs(command))));
 }
 
+export function signedPayloadHash(
+  command: unknown,
+  signingBlockHeight: number,
+  signingBlockHash: string,
+): string {
+  return payloadHashHex({ command, signingBlockHeight, signingBlockHash });
+}
+
 export function sha256Hex(text: string): string {
   return bytesToHex(sha256(new TextEncoder().encode(text)));
 }

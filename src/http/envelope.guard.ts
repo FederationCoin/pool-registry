@@ -1,7 +1,29 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import type { Request } from 'express';
 import { EnvelopeBodyCapBytes } from '../domain/constants';
+import { verifyEnvelopeSignature } from '../domain/envelope';
 import { RegistryProblem, type SigningEnvelope } from '../domain/types';
+
+export function tryWalletFromAuthorization(header: string | undefined): string | undefined {
+  const m = /^Bearer\s+(\S+)/i.exec(header ?? '');
+  if (!m) {
+    return undefined;
+  }
+  try {
+    const json = Buffer.from(m[1], 'base64url').toString('utf8');
+    if (Buffer.byteLength(json, 'utf8') > EnvelopeBodyCapBytes) {
+      return undefined;
+    }
+    const env = JSON.parse(json) as SigningEnvelope;
+    if (!env || typeof env !== 'object' || typeof env.wallet !== 'string' || !env.wallet) {
+      return undefined;
+    }
+    verifyEnvelopeSignature(env);
+    return env.wallet;
+  } catch {
+    return undefined;
+  }
+}
 
 @Injectable()
 export class SigningEnvelopeGuard implements CanActivate {
